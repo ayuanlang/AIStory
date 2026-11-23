@@ -63,11 +63,47 @@ def stamp_episode_script_persisted_at(db, episode, *, project_id: int) -> str:
     return stamp
 
 
-def stamp_script_optimization_persisted_at(db, episode) -> str:
+def stamp_pipeline_node_persisted_at(
+    db,
+    episode,
+    node_name: str,
+    *,
+    scene_id: str | None = None,
+    stamp: str = "",
+) -> str:
+    """Write the result clock onto one pipeline node after its artifact commit."""
+    from app.models.all_models import ScriptProgressPipelineNode
+
+    written = str(stamp or "").strip() or new_persisted_at()
+    episode_id = int(getattr(episode, "id", 0) or 0)
+    project_id = int(getattr(episode, "project_id", 0) or 0)
+    name = str(node_name or "").strip()
+    if episode_id <= 0 or not name:
+        return written
+    scene_norm = str(scene_id or "").strip() or None
+    query = db.query(ScriptProgressPipelineNode).filter(
+        ScriptProgressPipelineNode.episode_id == episode_id,
+        ScriptProgressPipelineNode.node_name == name,
+        ScriptProgressPipelineNode.scene_id == scene_norm,
+    )
+    if project_id > 0:
+        query = query.filter(ScriptProgressPipelineNode.project_id == project_id)
+    rows = query.all()
+    for row in rows:
+        meta: dict[str, Any] = dict(row.runtime_meta) if isinstance(row.runtime_meta, dict) else {}
+        meta["persisted_at"] = written
+        row.runtime_meta = meta
+        db.add(row)
+    if rows:
+        db.commit()
+    return written
+
+
+def stamp_script_optimization_persisted_at(db, episode, stamp: str = "") -> str:
     """Stamp 剧本优化 / 全局统筹 after its manuscript commit succeeded."""
     from app.models.all_models import ScriptProgressPipelineNode
 
-    stamp = new_persisted_at()
+    stamp = str(stamp or "").strip() or new_persisted_at()
     info = getattr(episode, "episode_info", None)
     episode.episode_info = {
         **(info if isinstance(info, dict) else {}),
@@ -109,9 +145,34 @@ def safe_stamp_project_persisted_at(db, project, key: str) -> str:
         return ""
 
 
-def safe_stamp_script_optimization_persisted_at(db, episode) -> str:
+def safe_stamp_pipeline_node_persisted_at(
+    db,
+    episode,
+    node_name: str,
+    *,
+    scene_id: str | None = None,
+    stamp: str = "",
+) -> str:
     try:
-        return stamp_script_optimization_persisted_at(db, episode)
+        return stamp_pipeline_node_persisted_at(
+            db,
+            episode,
+            node_name,
+            scene_id=scene_id,
+            stamp=stamp,
+        )
+    except Exception:
+        logger.warning("[persist_version] pipeline node stamp failed node=%s", node_name, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return ""
+
+
+def safe_stamp_script_optimization_persisted_at(db, episode, stamp: str = "") -> str:
+    try:
+        return stamp_script_optimization_persisted_at(db, episode, stamp=stamp)
     except Exception:
         logger.warning("[persist_version] script optimization stamp failed", exc_info=True)
         try:

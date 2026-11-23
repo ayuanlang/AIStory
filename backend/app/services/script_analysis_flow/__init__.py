@@ -2694,7 +2694,19 @@ def upsert_pipeline_node_status(
     if depends_on is not None:
         row.depends_on = list(depends_on)
     if runtime_meta is not None:
-        row.runtime_meta = dict(runtime_meta or {})
+        merged_meta = dict(runtime_meta or {})
+        previous_meta = dict(row.runtime_meta) if isinstance(row.runtime_meta, dict) else {}
+        # A new attempt drops the previous result clock. A later status write
+        # must not wipe the clock recorded when this attempt's result was committed.
+        if normalized_status not in {"running", "queued"}:
+            previous_stamp = str(previous_meta.get("persisted_at") or "").strip()
+            if previous_stamp and not str(merged_meta.get("persisted_at") or "").strip():
+                merged_meta["persisted_at"] = previous_stamp
+        row.runtime_meta = merged_meta
+    elif normalized_status in {"running", "queued"}:
+        previous_meta = dict(row.runtime_meta) if isinstance(row.runtime_meta, dict) else {}
+        if previous_meta.pop("persisted_at", None):
+            row.runtime_meta = previous_meta
     if retry_count is not None:
         row.retry_count = max(0, int(retry_count))
     if normalized_status == "running" and not previous_started_at:
@@ -3009,6 +3021,7 @@ def mark_storyboard_generation_applied(
         "business_event": "applied_from_workspace",
         "business_reason": "分镜已写入工作区",
         "shot_count": written_shots,
+        "persisted_at": now_bj_iso(),
     }
     if marker:
         upsert_pipeline_node_status(

@@ -289,6 +289,8 @@ def _format_project_visual_backfill_json(raw_text: str) -> str:
 _STAGE_OUTPUT_PATCH_LOCKS: Dict[int, threading.Lock] = {}
 _STAGE_OUTPUT_PATCH_LOCKS_GUARD = threading.Lock()
 SCENE_SUBSKILL_RESULTS_OUTPUT_KEY = "scene_subskill_results"
+SCENE_SUBSKILL_PERSISTED_AT_KEY = "scene_subskill_persisted_at"
+_RESULT_SLOT_CLOCK_KEYS = {"", "script_optimization", "scene_split", "environment_plan"}
 _SUBSKILL_RESULT_STEP_KEYS = {
     "drama": "drama",
     "combat": "combat",
@@ -476,6 +478,106 @@ def prune_subskill_results_map_to_scene_ids(
     }
 
 
+def _keep_slot_saved_at_when_content_matches(old_obj: Dict[str, Any], new_obj: Dict[str, Any]) -> None:
+    """A later full-document write of the same body must not drop the commit clock."""
+    old_stage = ((old_obj.get("stages") or {}).get("stage1") or {}) if isinstance(old_obj, dict) else {}
+    old_outputs = old_stage.get("outputs") if isinstance(old_stage, dict) else {}
+    if not isinstance(old_outputs, dict):
+        return
+    new_outputs = _ensure_stage_outputs(new_obj, "stage1")
+    for key, old_slot in old_outputs.items():
+        if not isinstance(old_slot, dict):
+            continue
+        saved = str(old_slot.get("saved_at") or "").strip()
+        if not saved:
+            continue
+        new_slot = new_outputs.get(key)
+        if not isinstance(new_slot, dict):
+            continue
+        if str(new_slot.get("saved_at") or "").strip():
+            continue
+        if str(old_slot.get("content") or "").strip() != str(new_slot.get("content") or "").strip():
+            continue
+        new_outputs[key] = {**new_slot, "saved_at": saved}
+
+
+def _json_step_slot(slot: Any, key: str, title: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    current = slot if isinstance(slot, dict) else {}
+    return {
+        **current,
+        "key": key,
+        "kind": "json",
+        "title": current.get("title") or title,
+        "content": json.dumps(payload, ensure_ascii=False, indent=2),
+    }
+
+
+def _load_step_map(outputs: Dict[str, Any], key: str) -> Dict[str, Dict[str, str]]:
+    slot = outputs.get(key) if isinstance(outputs.get(key), dict) else {}
+    return _parse_subskill_results_content(slot.get("content") if isinstance(slot, dict) else None)
+
+
+def _store_scene_step_value(result_map: Dict[str, Any], sid: str, key: str, value: str) -> None:
+    scene_map = result_map.get(sid) if isinstance(result_map.get(sid), dict) else {}
+    if not scene_map:
+        for alias in same_scene_result_keys(result_map, sid):
+            alias_map = result_map.get(alias)
+            if isinstance(alias_map, dict) and alias_map:
+                scene_map = dict(alias_map)
+                break
+    scene_map = dict(scene_map)
+    scene_map[key] = value
+    result_map[sid] = scene_map
+    for alias in same_scene_result_keys(result_map, sid):
+        if alias == sid:
+            continue
+        alias_map = result_map.get(alias)
+        if not isinstance(alias_map, dict):
+            continue
+        alias_map = dict(alias_map)
+        alias_map.pop(key, None)
+        if alias_map:
+            result_map[alias] = alias_map
+        else:
+            result_map.pop(alias, None)
+
+
+def _drop_scene_step_keys(result_map: Dict[str, Any], sid: str, keys: List[str]) -> List[str]:
+    matched_keys = same_scene_result_keys(result_map, sid) or [sid]
+    removed: List[str] = []
+    for matched in matched_keys:
+        scene_map = result_map.get(matched) if isinstance(result_map.get(matched), dict) else {}
+        scene_map = dict(scene_map)
+        for key in keys:
+            if str(scene_map.get(key) or "").strip() and key not in removed:
+                removed.append(key)
+            scene_map.pop(key, None)
+        if scene_map:
+            result_map[matched] = scene_map
+        elif matched in result_map:
+            result_map.pop(matched, None)
+    return removed
+
+
+def _merge_scene_step_maps(
+    old_map: Dict[str, Dict[str, str]],
+    new_map: Dict[str, Dict[str, str]],
+    keep_ids: set[str],
+) -> Dict[str, Dict[str, str]]:
+    if not old_map:
+        return {sid: dict(steps) for sid, steps in (new_map or {}).items()}
+    merged = {sid: dict(steps) for sid, steps in old_map.items()}
+    for sid, steps in (new_map or {}).items():
+        scene = dict(merged.get(sid) or {})
+        for key, value in steps.items():
+            if str(value or "").strip():
+                scene[key] = value
+        merged[sid] = scene
+    if keep_ids:
+        merged = prune_subskill_results_map_to_scene_ids(merged, keep_ids)
+    return merged
+
+
 def prune_stale_scene_subskill_results(episode: Episode, keep_scene_ids: Any) -> int:
     """Drop persisted per-scene subskill rows that are no longer in the latest split."""
     if episode is None:
@@ -485,27 +587,30 @@ def prune_stale_scene_subskill_results(episode: Episode, keep_scene_ids: Any) ->
         return 0
     obj = _load_stage_outputs_obj(episode)
     outputs = _ensure_stage_outputs(obj, "stage1")
-    slot = (
-        outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
-        if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
-        else {}
-    )
-    result_map = _parse_subskill_results_content(slot.get("content"))
-    if not result_map:
+    result_map = _load_step_map(outputs, SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+    time_map = _load_step_map(outputs, SCENE_SUBSKILL_PERSISTED_AT_KEY)
+    pruned = prune_subskill_results_map_to_scene_ids(result_map, keep) if result_map else {}
+    pruned_time = prune_subskill_results_map_to_scene_ids(time_map, keep) if time_map else {}
+    removed = len(result_map) - len(pruned) if result_map else 0
+    removed_time = len(time_map) - len(pruned_time) if time_map else 0
+    if removed <= 0 and removed_time <= 0:
         return 0
-    pruned = prune_subskill_results_map_to_scene_ids(result_map, keep)
-    removed = len(result_map) - len(pruned)
-    if removed <= 0:
-        return 0
-    outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
-        **slot,
-        "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
-        "kind": "json",
-        "title": slot.get("title") or "逐场优化分步结果",
-        "content": json.dumps(pruned, ensure_ascii=False, indent=2),
-    }
+    if removed > 0:
+        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY),
+            SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+            "逐场优化分步结果",
+            pruned,
+        )
+    if removed_time > 0:
+        outputs[SCENE_SUBSKILL_PERSISTED_AT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_PERSISTED_AT_KEY),
+            SCENE_SUBSKILL_PERSISTED_AT_KEY,
+            "逐场优化落库时间",
+            pruned_time,
+        )
     _dump_stage_outputs_obj(episode, obj)
-    return removed
+    return removed + removed_time
 
 
 def merge_ai_stage_outputs_preserving_subskills(existing: Any, incoming: Any) -> str:
@@ -535,28 +640,27 @@ def merge_ai_stage_outputs_preserving_subskills(existing: Any, incoming: Any) ->
         old_obj = {}
     old_map = _parse_subskill_results_content(_stage1_slot_content(old_obj, SCENE_SUBSKILL_RESULTS_OUTPUT_KEY))
     new_map = _parse_subskill_results_content(_stage1_slot_content(new_obj, SCENE_SUBSKILL_RESULTS_OUTPUT_KEY))
-    if not old_map:
-        return incoming_text
-    merged = {sid: dict(steps) for sid, steps in old_map.items()}
-    for sid, steps in new_map.items():
-        scene = dict(merged.get(sid) or {})
-        for key, value in steps.items():
-            if str(value or "").strip():
-                scene[key] = value
-        merged[sid] = scene
+    old_time = _parse_subskill_results_content(_stage1_slot_content(old_obj, SCENE_SUBSKILL_PERSISTED_AT_KEY))
+    new_time = _parse_subskill_results_content(_stage1_slot_content(new_obj, SCENE_SUBSKILL_PERSISTED_AT_KEY))
+    _keep_slot_saved_at_when_content_matches(old_obj, new_obj)
+    if not old_map and not old_time:
+        return json.dumps(new_obj, ensure_ascii=False, indent=2)
     keep_ids = scene_ids_from_split_text(_stage1_slot_content(new_obj, "scene_split"))
-    if keep_ids:
-        merged = prune_subskill_results_map_to_scene_ids(merged, keep_ids)
     outputs = _ensure_stage_outputs(new_obj, "stage1")
-    slot = outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
-    slot = slot if isinstance(slot, dict) else {}
-    outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
-        **slot,
-        "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
-        "kind": "json",
-        "title": slot.get("title") or "逐场优化分步结果",
-        "content": json.dumps(merged, ensure_ascii=False, indent=2),
-    }
+    if old_map:
+        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY),
+            SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+            "逐场优化分步结果",
+            _merge_scene_step_maps(old_map, new_map, keep_ids),
+        )
+    if old_time:
+        outputs[SCENE_SUBSKILL_PERSISTED_AT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_PERSISTED_AT_KEY),
+            SCENE_SUBSKILL_PERSISTED_AT_KEY,
+            "逐场优化落库时间",
+            _merge_scene_step_maps(old_time, new_time, keep_ids),
+        )
     return json.dumps(new_obj, ensure_ascii=False, indent=2)
 
 
@@ -595,40 +699,24 @@ def persist_scene_subskill_step_result(
             return {"patched": False, "reason": "episode_missing"}
         obj = _load_stage_outputs_obj(episode)
         outputs = _ensure_stage_outputs(obj, "stage1")
-        slot = (
-            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
-            if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
-            else {}
+        result_map = _load_step_map(outputs, SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+        time_map = _load_step_map(outputs, SCENE_SUBSKILL_PERSISTED_AT_KEY)
+        _store_scene_step_value(result_map, sid, key, text)
+        from app.core.persist_version import new_persisted_at
+
+        _store_scene_step_value(time_map, sid, key, new_persisted_at())
+        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY),
+            SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+            "逐场优化分步结果",
+            result_map,
         )
-        result_map = _parse_subskill_results_content(slot.get("content"))
-        scene_map = result_map.get(sid) if isinstance(result_map.get(sid), dict) else {}
-        if not scene_map:
-            for alias in same_scene_result_keys(result_map, sid):
-                alias_map = result_map.get(alias)
-                if isinstance(alias_map, dict) and alias_map:
-                    scene_map = dict(alias_map)
-                    break
-        scene_map = dict(scene_map)
-        scene_map[key] = text
-        result_map[sid] = scene_map
-        for alias in same_scene_result_keys(result_map, sid):
-            if alias == sid:
-                continue
-            alias_map = result_map.get(alias)
-            if not isinstance(alias_map, dict):
-                continue
-            alias_map.pop(key, None)
-            if alias_map:
-                result_map[alias] = alias_map
-            else:
-                result_map.pop(alias, None)
-        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
-            **slot,
-            "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
-            "kind": "json",
-            "title": slot.get("title") or "逐场优化分步结果",
-            "content": json.dumps(result_map, ensure_ascii=False, indent=2),
-        }
+        outputs[SCENE_SUBSKILL_PERSISTED_AT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_PERSISTED_AT_KEY),
+            SCENE_SUBSKILL_PERSISTED_AT_KEY,
+            "逐场优化落库时间",
+            time_map,
+        )
         _dump_stage_outputs_obj(episode, obj)
         db.commit()
     return {"patched": True, "scene_id": sid, "step_key": key, "chars": len(text)}
@@ -681,32 +769,22 @@ def clear_scene_subskill_step_results(
             return {"patched": False, "removed": [], "reason": "episode_missing"}
         obj = _load_stage_outputs_obj(episode)
         outputs = _ensure_stage_outputs(obj, "stage1")
-        slot = (
-            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
-            if isinstance(outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY), dict)
-            else {}
+        result_map = _load_step_map(outputs, SCENE_SUBSKILL_RESULTS_OUTPUT_KEY)
+        time_map = _load_step_map(outputs, SCENE_SUBSKILL_PERSISTED_AT_KEY)
+        removed = _drop_scene_step_keys(result_map, sid, keys)
+        _drop_scene_step_keys(time_map, sid, keys)
+        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_RESULTS_OUTPUT_KEY),
+            SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
+            "逐场优化分步结果",
+            result_map,
         )
-        result_map = _parse_subskill_results_content(slot.get("content"))
-        matched_keys = same_scene_result_keys(result_map, sid) or [sid]
-        removed = []
-        for matched in matched_keys:
-            scene_map = result_map.get(matched) if isinstance(result_map.get(matched), dict) else {}
-            scene_map = dict(scene_map)
-            for key in keys:
-                if str(scene_map.get(key) or "").strip() and key not in removed:
-                    removed.append(key)
-                scene_map.pop(key, None)
-            if scene_map:
-                result_map[matched] = scene_map
-            elif matched in result_map:
-                result_map.pop(matched, None)
-        outputs[SCENE_SUBSKILL_RESULTS_OUTPUT_KEY] = {
-            **slot,
-            "key": SCENE_SUBSKILL_RESULTS_OUTPUT_KEY,
-            "kind": "json",
-            "title": slot.get("title") or "逐场优化分步结果",
-            "content": json.dumps(result_map, ensure_ascii=False, indent=2),
-        }
+        outputs[SCENE_SUBSKILL_PERSISTED_AT_KEY] = _json_step_slot(
+            outputs.get(SCENE_SUBSKILL_PERSISTED_AT_KEY),
+            SCENE_SUBSKILL_PERSISTED_AT_KEY,
+            "逐场优化落库时间",
+            time_map,
+        )
         _dump_stage_outputs_obj(episode, obj)
         db.commit()
     return {"patched": True, "removed": removed, "scene_id": sid}
@@ -781,6 +859,7 @@ def _patch_episode_stage1_outputs(
     adapted_script: str,
     visual_backfill_json: str = "",
     node_output_key: str = "",
+    saved_at: str = "",
 ) -> None:
     raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
     try:
@@ -828,13 +907,17 @@ def _patch_episode_stage1_outputs(
     stable_node_key = str(node_output_key or "").strip()
     if stable_node_key:
         node_slot = outputs.get(stable_node_key) if isinstance(outputs.get(stable_node_key), dict) else {}
-        outputs[stable_node_key] = {
+        node_payload = {
             **node_slot,
             "key": stable_node_key,
             "kind": node_slot.get("kind") or "markdown",
             "title": node_slot.get("title") or stable_node_key,
             "content": str(raw_text or ""),
         }
+        written_at = str(saved_at or "").strip()
+        if written_at:
+            node_payload["saved_at"] = written_at
+        outputs[stable_node_key] = node_payload
     episode.ai_stage_outputs = json.dumps(obj, ensure_ascii=False, indent=2)
 
 
@@ -938,6 +1021,9 @@ def persist_script_optimization_stage(
         # Refresh first so a stale request-session copy cannot wipe
         # scene_subskill_results written by a sibling session.
         persist_key = str(node_output_key or "").strip()
+        from app.core.persist_version import new_persisted_at
+
+        slot_stamp = new_persisted_at() if persist_key in _RESULT_SLOT_CLOCK_KEYS else ""
         if persist_key in {"scene_subskills", "scene_subskill_results"}:
             from app.services.script_analysis_flow.environment_reuse import (
                 script_has_environment_plan_payload,
@@ -961,6 +1047,7 @@ def persist_script_optimization_stage(
             adapted_script=adapted_script,
             visual_backfill_json=visual_backfill_json,
             node_output_key=node_output_key,
+            saved_at=slot_stamp,
         )
         db.commit()
     try:
@@ -968,10 +1055,20 @@ def persist_script_optimization_stage(
     except Exception:
         pass
     persisted_at = ""
-    if str(node_output_key or "").strip() in {"", "script_optimization", "scene_split"}:
+    node_key = str(node_output_key or "").strip()
+    if node_key in {"", "script_optimization", "scene_split"}:
         from app.core.persist_version import safe_stamp_script_optimization_persisted_at
 
-        persisted_at = safe_stamp_script_optimization_persisted_at(db, episode)
+        persisted_at = safe_stamp_script_optimization_persisted_at(db, episode, stamp=slot_stamp)
+    elif node_key == "environment_plan" and slot_stamp:
+        from app.core.persist_version import safe_stamp_pipeline_node_persisted_at
+
+        persisted_at = safe_stamp_pipeline_node_persisted_at(
+            db,
+            episode,
+            "environment_plan",
+            stamp=slot_stamp,
+        )
     logger.info(
         "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_adaptation chars=%s raw_chars=%s visual_backfill_chars=%s persisted_at=%s",
         STAGE_SCRIPT_OPTIMIZATION,

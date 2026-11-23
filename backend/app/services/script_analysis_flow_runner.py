@@ -1214,8 +1214,18 @@ async def execute_scene_analysis_flow_node(
                         if failed_scene_ids
                         else None
                     )
-                if node_key in {"scene_split", "script_optimization"} and node_status in {"success", "warning"}:
-                    from app.core.persist_version import SCRIPT_OPTIMIZATION_PERSISTED_AT
+                if node_key in {
+                    "scene_split",
+                    "script_optimization",
+                    "environment_plan",
+                    "asset_design_character",
+                    "asset_design_prop",
+                    "asset_design_environment",
+                    "asset_design_environment_quad",
+                } and node_status in {"success", "warning"}:
+                    import json
+
+                    from app.core.persist_version import SCRIPT_OPTIMIZATION_PERSISTED_AT, new_persisted_at
                     from app.models.all_models import ScriptProgressPipelineNode
 
                     stamp = ""
@@ -1225,25 +1235,42 @@ async def execute_scene_analysis_flow_node(
                         .populate_existing()
                         .first()
                     )
-                    fresh_info = getattr(fresh_episode, "episode_info", None) if fresh_episode is not None else None
-                    if isinstance(fresh_info, dict):
-                        stamp = str(fresh_info.get(SCRIPT_OPTIMIZATION_PERSISTED_AT) or "").strip()
-                    if stamp and node_runtime_meta is not None:
-                        merged_meta = dict(node_runtime_meta)
-                        merged_meta["persisted_at"] = stamp
-                        node_runtime_meta = merged_meta
-                    elif stamp and node_runtime_meta is None:
+                    if node_key in {"scene_split", "script_optimization"}:
+                        fresh_info = getattr(fresh_episode, "episode_info", None) if fresh_episode is not None else None
+                        if isinstance(fresh_info, dict):
+                            stamp = str(fresh_info.get(SCRIPT_OPTIMIZATION_PERSISTED_AT) or "").strip()
+                    elif node_key == "environment_plan" and fresh_episode is not None:
+                        try:
+                            stage_obj = json.loads(str(getattr(fresh_episode, "ai_stage_outputs", "") or "") or "{}")
+                            slot = (
+                                ((stage_obj.get("stages") or {}).get("stage1") or {}).get("outputs") or {}
+                            ).get("environment_plan")
+                            if isinstance(slot, dict):
+                                stamp = str(slot.get("saved_at") or "").strip()
+                        except Exception:
+                            stamp = ""
+                    if not stamp:
+                        stamp = new_persisted_at()
+                    if node_runtime_meta is None:
                         existing_node = (
                             db.query(ScriptProgressPipelineNode)
                             .filter(
                                 ScriptProgressPipelineNode.project_id == int(node_project_id),
                                 ScriptProgressPipelineNode.episode_id == int(node_episode_id),
                                 ScriptProgressPipelineNode.node_name == node_key,
+                                ScriptProgressPipelineNode.scene_id.is_(None),
                             )
                             .first()
                         )
-                        if existing_node is None:
-                            node_runtime_meta = {"persisted_at": stamp}
+                        previous_meta = (
+                            existing_node.runtime_meta
+                            if existing_node is not None and isinstance(existing_node.runtime_meta, dict)
+                            else {}
+                        )
+                        node_runtime_meta = dict(previous_meta)
+                    else:
+                        node_runtime_meta = dict(node_runtime_meta)
+                    node_runtime_meta["persisted_at"] = stamp
                 upsert_pipeline_node_status(
                     db,
                     project_id=node_project_id,

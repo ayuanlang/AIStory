@@ -74,7 +74,7 @@ import {
     isAssetFromEpisode,
 } from '../reuseEnvAssets';
 import { hasSuccessfulPipelineNode, isStoryboardQueuedPlaceholderNode, isThisRunPipelineNode, pickDiagnosticPipelineNode, pickNewestPipelineNode, resolveAssetCategoryDiagnosticState, shouldHoldStoryboardKickoffForQueuedPlaceholder, shouldRejectLeftoverStagingKickoff, storyboardAutoKickoffAlreadyCovered, storyboardShotsLanded, derivedEnvironmentRegenDisabled } from '../analysisRestartGuards';
-import { formatPersistedClock, latestPersistIso } from '../persistVersion';
+import { formatPersistedClock, formatPersistedGap, latestPersistIso } from '../persistVersion';
 
 import { 
     fetchProject, 
@@ -2018,7 +2018,7 @@ const SCENE_SUBSKILL_RESULT_KEYS = {
     framing_opt: 'framing',
     staging_opt: 'staging',
 };
-const STAGE1_NODE_RESULT_KEYS = ['scene_split', 'environment_plan', 'scene_subskills', 'scene_subskill_results'];
+const STAGE1_NODE_RESULT_KEYS = ['scene_split', 'environment_plan', 'scene_subskills', 'scene_subskill_results', 'scene_subskill_persisted_at'];
 
 const parseSceneSubskillResultsMap = (raw) => {
     const text = String(raw || '').trim();
@@ -2048,6 +2048,14 @@ const collectStage1NodeOutputsFromSlotMap = (outputs) => {
         if (content.trim()) collected[key] = content;
     });
     return collected;
+};
+
+const SCENE_MATRIX_STAMP_STEP = {
+    drama_opt: 'drama',
+    combat_opt: 'combat',
+    layout_opt: 'layout',
+    framing_opt: 'framing',
+    staging_opt: 'staging',
 };
 
 const SCENE_SUBSKILL_BODY_KEYS = ['staging', 'framing', 'layout', 'combat', 'drama'];
@@ -5603,6 +5611,12 @@ const isSceneOrchestrationResumePhase = (phase) => {
     ].includes(key);
 };
 
+const ASSET_CATEGORY_PIPELINE_NODE = {
+    characters: 'asset_design_character',
+    props: 'asset_design_prop',
+    environments: 'asset_design_environment',
+};
+
 const resolveAssetCategoryKeysFromTargets = (targetEntityTypes) => {
     const raw = Array.isArray(targetEntityTypes) ? targetEntityTypes : null;
     if (!raw || raw.length === 0) return ['characters', 'props', 'environments'];
@@ -5796,6 +5810,11 @@ const runAfterScriptPaint = (fn, { immediate = false } = {}) => {
 };
 
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, onWorkspaceScenesChanged = null, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
+    const [persistNow, setPersistNow] = useState(() => Date.now());
+    useEffect(() => {
+        const timerId = window.setInterval(() => setPersistNow(Date.now()), 60_000);
+        return () => window.clearInterval(timerId);
+    }, []);
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [sceneScores, setSceneScores] = useState([]);
     const [sceneScoreBusyId, setSceneScoreBusyId] = useState('');
@@ -7267,22 +7286,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [sceneMatrixRerun, setSceneMatrixRerun] = useState(null);
     const [sceneMatrixClearedSteps, setSceneMatrixClearedSteps] = useState(null);
     const [pinnedSubskillResults, setPinnedSubskillResults] = useState('');
+    const [pinnedSubskillPersistedAt, setPinnedSubskillPersistedAt] = useState('');
     const [pinnedStage1NodeOutputs, setPinnedStage1NodeOutputs] = useState(null);
     const pinnedStage1NodeOutputsRef = useRef(null);
     const sceneMatrixClearedStepsRef = useRef(null);
     const pinnedEpisodeOutputsRef = useRef('');
     useEffect(() => {
         const outputs = String(activeEpisode?.ai_stage_outputs || '');
-        if (!pinnedSubskillResults) {
+        if (!pinnedSubskillResults && !pinnedSubskillPersistedAt) {
             pinnedEpisodeOutputsRef.current = outputs;
             return;
         }
         if (sceneMatrixRerun) return;
         if (pinnedEpisodeOutputsRef.current && pinnedEpisodeOutputsRef.current !== outputs) {
             setPinnedSubskillResults('');
+            setPinnedSubskillPersistedAt('');
         }
         pinnedEpisodeOutputsRef.current = outputs;
-    }, [activeEpisode?.ai_stage_outputs, pinnedSubskillResults, sceneMatrixRerun]);
+    }, [activeEpisode?.ai_stage_outputs, pinnedSubskillPersistedAt, pinnedSubskillResults, sceneMatrixRerun]);
     useEffect(() => {
         setPinnedStage1NodeOutputs((prev) => {
             if (!prev || typeof prev !== 'object') return prev;
@@ -14678,12 +14699,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         Object.entries(mergedNodeOutputs).forEach(([key, content]) => {
             if (!String(content || '').trim()) return;
-            stage1Outputs[key] = {
+            const previous = persistedNodeOutputs?.[key];
+            const previousContent = previous && typeof previous === 'object' && !Array.isArray(previous)
+                ? String(previous.content || '').trim()
+                : String(previous || '').trim();
+            const previousSaved = previous && typeof previous === 'object' && !Array.isArray(previous)
+                ? String(previous.saved_at || '').trim()
+                : '';
+            const slot = {
                 key,
-                kind: key === 'scene_subskill_results' ? 'json' : 'markdown',
+                kind: key === 'scene_subskill_results' || key === 'scene_subskill_persisted_at' ? 'json' : 'markdown',
                 title: key,
                 content,
             };
+            if (previousSaved && previousContent === String(content || '').trim()) {
+                slot.saved_at = previousSaved;
+            }
+            stage1Outputs[key] = slot;
         });
 
         return {
@@ -14958,7 +14990,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (existing) return;
                     outputs[key] = {
                         key,
-                        kind: key === 'scene_subskill_results' ? 'json' : 'markdown',
+                        kind: key === 'scene_subskill_results' || key === 'scene_subskill_persisted_at' ? 'json' : 'markdown',
                         title: key,
                         content: text,
                     };
@@ -14969,6 +15001,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         kind: 'json',
                         title: outputs.scene_subskill_results?.title || '逐场优化分步结果',
                         content: pinnedSubskillResults,
+                    };
+                }
+                if (pinnedSubskillPersistedAt) {
+                    outputs.scene_subskill_persisted_at = {
+                        key: 'scene_subskill_persisted_at',
+                        kind: 'json',
+                        title: outputs.scene_subskill_persisted_at?.title || '逐场优化落库时间',
+                        content: pinnedSubskillPersistedAt,
                     };
                 }
                 ['scene_split', 'environment_plan'].forEach((slotKey) => {
@@ -15058,7 +15098,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return { version: 1, stages: {} };
             }
         }
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsPipelineNodes, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, pinnedStage1NodeOutputs, pinnedSubskillResults, subjectIndexText]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, adaptationText, buildStageOutputsObject, diagnosticsPipelineNodes, diagnosticsRefreshNonce, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, isAnalyzing, liveSceneMarkdownByScene, llmAssetRawResultContent, mergeSceneMarkdownBySceneMaps, parseSceneMarkdownBySceneMap, parseStageOutputsObject, parseVisualBackfillGlobalStyle, pinnedStage1NodeOutputs, pinnedSubskillPersistedAt, pinnedSubskillResults, subjectIndexText]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -20794,6 +20834,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const claimIncomingAssetLock = () => {
             freeAssetCategoryKeys.forEach((key) => phase2InFlightCategoriesRef.current.add(key));
             syncRetryingAssetCategoryUi();
+            const nodeNames = new Set(
+                freeAssetCategoryKeys
+                    .map((key) => ASSET_CATEGORY_PIPELINE_NODE[key])
+                    .filter(Boolean)
+            );
+            if (!nodeNames.size) return;
+            setDiagnosticsPipelineNodes((prev) => (Array.isArray(prev) ? prev : []).map((node) => {
+                const name = String(node?.node_name || '').trim();
+                if (!nodeNames.has(name) || String(node?.scene_id || '').trim()) return node;
+                const meta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? { ...node.runtime_meta } : {};
+                delete meta.persisted_at;
+                return { ...node, status: 'running', runtime_meta: meta };
+            }));
         };
 
         const episodeIdForPhase2 = Number(activeEpisode?.id || 0) || 0;
@@ -31793,6 +31846,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             startedAt,
             resetLogs: true,
         });
+        setDiagnosticsPipelineNodes((prev) => (Array.isArray(prev) ? prev : []).map((node) => {
+            const name = String(node?.node_name || '').trim();
+            if (String(node?.scene_id || '').trim()) return node;
+            if (name !== stableNode) return node;
+            const meta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? { ...node.runtime_meta } : {};
+            delete meta.persisted_at;
+            return { ...node, status: 'running', runtime_meta: meta };
+        }));
         if (['scene_split', 'environment_plan', 'scene_subskill_pipeline'].includes(stableNode)) {
             resetStoryboardKickoffTracking();
             const pid = Number(projectId || activeEpisode?.project_id || 0);
@@ -32813,11 +32874,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const episodeId = Number(activeEpisode?.id || 0);
             if (pid > 0 && episodeId > 0) {
                 try {
+                    const storyboardMarkers = readyTargets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean);
                     await resetStoryboardGenerationProgress({
                         project_id: pid,
                         episode_id: episodeId,
-                        scene_markers: readyTargets.map((item) => String(item?.sceneId || '').trim()).filter(Boolean),
+                        scene_markers: storyboardMarkers,
                     });
+                    const markerAllow = expandSceneIdAllowlist(storyboardMarkers, episodePrefix);
+                    setDiagnosticsPipelineNodes((prev) => (Array.isArray(prev) ? prev : []).map((node) => {
+                        const name = String(node?.node_name || '').trim();
+                        if (name !== 'storyboard_generation' && name !== 'shot_generation') return node;
+                        const nodeSceneId = String(node?.scene_id || '').trim();
+                        if (rerunMode === 'single' && !isSceneIdInAllowlist(nodeSceneId, markerAllow, episodePrefix)) return node;
+                        const meta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? { ...node.runtime_meta } : {};
+                        delete meta.persisted_at;
+                        meta.rerun_cleared = true;
+                        meta.business_event = 'queued';
+                        return { ...node, status: 'queued', runtime_meta: meta };
+                    }));
                 } catch (resetErr) {
                     onLog?.(
                         t(
@@ -33271,14 +33345,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             stepKeysToClear,
             episodePrefix
         );
+        const existingTimesMap = parseSceneSubskillResultsMap(
+            latestStage1NodeOutputsRef.current?.scene_subskill_persisted_at
+            || getStageOutputContent('stage1', 'scene_subskill_persisted_at')
+            || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_subskill_persisted_at')
+        );
+        const nextTimesMap = dropMatchingSceneStepKeys(
+            existingTimesMap,
+            targetSceneId,
+            stepKeysToClear,
+            episodePrefix
+        );
         const pinnedResults = JSON.stringify(nextResultsMap);
+        const pinnedTimes = JSON.stringify(nextTimesMap);
         setPinnedSubskillResults(pinnedResults);
+        setPinnedSubskillPersistedAt(pinnedTimes);
         latestStage1NodeOutputsRef.current = {
             ...latestStage1NodeOutputsRef.current,
             ...(liveSplit ? { scene_split: liveSplit } : {}),
             ...(liveEnvPlan ? { environment_plan: liveEnvPlan } : {}),
             ...(liveSubskills ? { scene_subskills: liveSubskills } : {}),
             scene_subskill_results: pinnedResults,
+            scene_subskill_persisted_at: pinnedTimes,
         };
         setAdaptationText((prev) => stripClearedSectionsFromSceneScript(
             prev,
@@ -33304,6 +33392,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             meta.called_subskills = [];
             meta.rerun_cleared = true;
             meta.cleared_steps = name === 'storyboard_generation' ? ['storyboard'] : stepKeysToClear;
+            delete meta.persisted_at;
             return {
                 ...node,
                 status: name === 'scene_subskill_scene' ? 'running' : 'queued',
@@ -33575,7 +33664,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const freshResults = String(
                     latestStage1NodeOutputsRef.current?.scene_subskill_results || ''
                 ).trim();
+                const freshTimes = String(
+                    latestStage1NodeOutputsRef.current?.scene_subskill_persisted_at || ''
+                ).trim();
                 if (freshResults) setPinnedSubskillResults(freshResults);
+                if (freshTimes) setPinnedSubskillPersistedAt(freshTimes);
                 setDiagnosticsRefreshNonce((value) => value + 1);
             } catch (_) {}
             sceneMatrixRerunDepthRef.current = Math.max(0, sceneMatrixRerunDepthRef.current - 1);
@@ -34622,6 +34715,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const wantedName = String(selectedName || '').trim();
         setEnvironmentQuadRerunModal((prev) => ({ ...prev, open: false }));
         setEnvironmentQuadRerunActive(true);
+        setDiagnosticsPipelineNodes((prev) => (Array.isArray(prev) ? prev : []).map((node) => {
+            if (String(node?.node_name || '').trim() !== 'asset_design_environment_quad') return node;
+            if (String(node?.scene_id || '').trim()) return node;
+            const meta = node?.runtime_meta && typeof node.runtime_meta === 'object' ? { ...node.runtime_meta } : {};
+            delete meta.persisted_at;
+            return { ...node, status: 'running', runtime_meta: meta };
+        }));
         onLog?.(
             wantedName
                 ? t(`正在重跑主环境四宫格：${wantedName}`, `Rerunning the main-environment four-grid: ${wantedName}`)
@@ -37514,6 +37614,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </h2>
                     <p className="mt-1.5 text-xs text-white/45">
                         {t('编写与分析本集剧本，产物将同步到场景与资产工作区。', 'Write and analyze this episode; outputs sync to scenes and assets.')}
+                        {(() => {
+                            const persistedAt = String(activeEpisode?.episode_info?.episode_script_persisted_at || '').trim();
+                            const gap = formatPersistedGap(persistedAt, persistNow);
+                            const clock = formatPersistedClock(persistedAt);
+                            if (!gap || !String(activeEpisode?.script_content || '').trim()) return null;
+                            return (
+                                <span
+                                    className="ml-2 tabular-nums text-white/55"
+                                    title={clock
+                                        ? t(`入库时间 ${clock}`, `Stored at ${clock}`)
+                                        : t('入库时间', 'Stored time')}
+                                >
+                                    {t('入库', 'Stored')} {t(gap.zh, gap.en)}
+                                </span>
+                            );
+                        })()}
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -38139,6 +38255,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     : t('导入', 'Import')}
                             </button>
                         );
+                        const renderStoredGap = (iso) => {
+                            const gap = formatPersistedGap(iso, persistNow);
+                            const clock = formatPersistedClock(iso);
+                            if (!gap) return null;
+                            return (
+                                <span
+                                    className="text-[10px] text-white/45 tabular-nums"
+                                    title={clock
+                                        ? t(`入库时间 ${clock}`, `Stored at ${clock}`)
+                                        : t('入库时间', 'Stored time')}
+                                >
+                                    {t('入库', 'Stored')} {t(gap.zh, gap.en)}
+                                </span>
+                            );
+                        };
+                        const pipelineNodePersistedAt = (nodeName) => {
+                            const nodes = Array.isArray(diagnosticsPipelineNodes) ? diagnosticsPipelineNodes : [];
+                            const wanted = String(nodeName || '').trim();
+                            const stamps = nodes
+                                .filter((node) => (
+                                    String(node?.node_name || '').trim() === wanted
+                                    && !String(node?.scene_id || '').trim()
+                                ))
+                                .map((node) => node?.runtime_meta?.persisted_at);
+                            return latestPersistIso(stamps);
+                        };
                         const renderAssetCategoryCell = (spec) => {
                             const state = assetCategoryStates[spec.key] || {
                                 ready: false,
@@ -38265,6 +38407,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         >
                                             {statusLabel}
                                         </span>
+                                        {state.ready && !reextractingThis ? renderStoredGap(pipelineNodePersistedAt(spec.nodeName)) : null}
                                         {state.failed && !reextractingThis ? renderFailedReasonPreview(state) : null}
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {state.failed && !reextractingThis ? renderFailedReasonButton(inspectAssetFailure) : null}
@@ -38472,6 +38615,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         >
                                             {statusLabel}
                                         </span>
+                                        {ready ? renderStoredGap(pipelineNodePersistedAt('asset_design_environment_quad')) : null}
                                         {failed ? renderFailedReasonPreview(state) : null}
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
                                             {failed ? renderFailedReasonButton(inspectQuadFailure) : null}
@@ -38510,6 +38654,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 stamps,
                                 activeEpisode?.episode_info?.script_optimization_persisted_at,
                             );
+                        };
+                        const stage1SlotSavedAt = (slotKey) => {
+                            const raw = String(activeEpisode?.ai_stage_outputs || '').trim();
+                            if (!raw) return '';
+                            try {
+                                const slot = JSON.parse(raw)?.stages?.stage1?.outputs?.[slotKey];
+                                return String(slot?.saved_at || '').trim();
+                            } catch (_) {
+                                return '';
+                            }
+                        };
+                        const nodeResultPersistedAt = (nodeKey) => {
+                            if (nodeKey === 'scene_split' || nodeKey === 'script_optimization') {
+                                return scriptOptimizationPersistedAt(nodeKey);
+                            }
+                            if (nodeKey === 'environment_plan') {
+                                return latestPersistIso(
+                                    pipelineNodePersistedAt('environment_plan'),
+                                    stage1SlotSavedAt('environment_plan'),
+                                );
+                            }
+                            return pipelineNodePersistedAt(nodeKey);
                         };
                         const renderPipelineNodeStep = (stepKey, state, number, nodeKey) => (
                             <div className="flex flex-col items-center gap-2 relative min-w-[78px]">
@@ -38590,18 +38756,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     : t('等待中', 'Waiting')}
                                     </span>
                                     {state.failed ? renderFailedReasonPreview(state) : null}
-                                    {state.ready ? (() => {
-                                        const clock = formatPersistedClock(scriptOptimizationPersistedAt(nodeKey));
-                                        if (!clock) return null;
-                                        return (
-                                            <span
-                                                className="text-[10px] text-white/45 tabular-nums"
-                                                title={t('入库时间，用来确定这一版', 'Stored time, used as this version')}
-                                            >
-                                                {t('入库', 'Stored')} {clock}
-                                            </span>
-                                        );
-                                    })() : null}
+                                    {state.ready ? renderStoredGap(nodeResultPersistedAt(nodeKey)) : null}
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         {state.failed
                                             ? renderFailedReasonButton(() => openInspectFromNode(stepKey, state, {
@@ -39412,6 +39567,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 : t('等待中', 'Waiting')}
                                 </span>
                                 {state.failed ? renderFailedReasonPreview(state) : null}
+                                {state.ready ? renderStoredGap((() => {
+                                    const step = SCENE_MATRIX_STAMP_STEP[stepKey];
+                                    if (step) {
+                                        const raw = getStageOutputContent('stage1', 'scene_subskill_persisted_at')
+                                            || latestStage1NodeOutputsRef.current?.scene_subskill_persisted_at
+                                            || readStage1OutputSlotContent(activeEpisode?.ai_stage_outputs, 'scene_subskill_persisted_at');
+                                        const steps = lookupSceneSubskillSteps(
+                                            parseSceneSubskillResultsMap(raw),
+                                            sceneId,
+                                            episodePrefix
+                                        );
+                                        return String(steps?.[step] || '').trim();
+                                    }
+                                    if (stepKey === 'storyboard') {
+                                        const node = findScenePipelineNode('storyboard_generation', sceneId);
+                                        return String(node?.runtime_meta?.persisted_at || '').trim();
+                                    }
+                                    return '';
+                                })()) : null}
                                 <div className="flex items-center gap-1 flex-wrap justify-center">
                                     {state.failed ? renderFailedReasonButton(inspectSceneFailure) : null}
                                     {renderNodeSpecButton(

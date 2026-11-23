@@ -32,7 +32,7 @@ import {
     applyStructuredPrefill,
     episodeOutlineProgress,
 } from '../storyPrefill';
-import { formatPersistedClock, latestPersistIso } from '../persistVersion';
+import { formatPersistedClock, formatPersistedGap, latestPersistIso } from '../persistVersion';
 
 import { 
     fetchProject, 
@@ -198,6 +198,11 @@ const stripStackedProductionScriptTitleSuffixes = (title) => {
 
 export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onRefreshEpisodes, onJumpToEpisode, onTabChange, episodes = [], uiLang = 'en', mode = 'overview', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const functionApiConfigs = useFunctionApis();
+    const [persistNow, setPersistNow] = useState(() => Date.now());
+    useEffect(() => {
+        const timerId = window.setInterval(() => setPersistNow(Date.now()), 60_000);
+        return () => window.clearInterval(timerId);
+    }, []);
     const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
         return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
     });
@@ -2759,14 +2764,17 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         episodeScriptResultStamps,
     );
     const renderPersistedClock = (iso) => {
+        const gap = formatPersistedGap(iso, persistNow);
         const clock = formatPersistedClock(iso);
-        if (!clock) return null;
+        if (!gap) return null;
         return (
             <span
                 className="text-[10px] text-white/45 tabular-nums"
-                title={t('入库时间，用来确定这一版', 'Stored time, used as this version')}
+                title={clock
+                    ? t(`入库时间 ${clock}`, `Stored at ${clock}`)
+                    : t('入库时间', 'Stored time')}
             >
-                {t('入库', 'Stored')} {clock}
+                {t('入库', 'Stored')} {t(gap.zh, gap.en)}
             </span>
         );
     };
@@ -5113,9 +5121,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                             : status === 'skipped'
                                                                 ? 'bg-yellow-500/20 text-yellow-200 border-yellow-500/30'
                                                                 : 'bg-white/10 text-white/80 border-white/20';
+                                                const resultGap = status === 'generated' ? formatPersistedGap(row?.persisted_at, persistNow) : null;
                                                 const resultClock = status === 'generated' ? formatPersistedClock(row?.persisted_at) : '';
                                                 const resultText = row?.error || row?.reason || (row?.output_chars ? `${row.output_chars} ${t('字符', 'chars')}` : (status === 'pending' ? t('等待中', 'Waiting') : '-'));
-                                                const resultWithClock = resultClock ? `${resultText} · ${t('入库', 'Stored')} ${resultClock}` : resultText;
+                                                const storedLabel = resultGap ? `${t('入库', 'Stored')} ${t(resultGap.zh, resultGap.en)}` : '';
+                                                const resultWithClock = storedLabel ? `${resultText} · ${storedLabel}` : resultText;
                                                 const titleMismatchSuffix = row?.title_mismatch ? ` · ${t('标题/编号不一致', 'Title/number mismatch')}` : '';
                                                 const statusLabel =
                                                     status === 'generated'
@@ -5147,7 +5157,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                         <div className="col-span-2">
                                                             <span className={`px-2 py-0.5 rounded text-xs border ${statusClass}`}>{statusLabel}</span>
                                                         </div>
-                                                        <div className="col-span-3 text-xs text-white/70 truncate" title={resultWithClock}>{resultWithClock}</div>
+                                                        <div
+                                                            className="col-span-3 text-xs text-white/70 truncate"
+                                                            title={resultClock ? `${resultWithClock} · ${t(`入库时间 ${resultClock}`, `Stored at ${resultClock}`)}` : resultWithClock}
+                                                        >
+                                                            {resultWithClock}
+                                                        </div>
                                                         <div className="col-span-2 text-right">
                                                             {row?.episode_id ? (
                                                                 <button
