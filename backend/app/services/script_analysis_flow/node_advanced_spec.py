@@ -24,6 +24,7 @@ _PROMPT_STEP_KEYS = {
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md": "combat_opt",
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_vfx.md": "combat_opt",
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_xian_attack.md": "combat_opt",
+    "skills/scene_analysis_feature_stack/scene_planning_1_subskill_world_layout.md": "layout_opt",
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_derived_framing.md": "framing_opt",
     "skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md": "staging_opt",
 }

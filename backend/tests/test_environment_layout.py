@@ -5,12 +5,15 @@ from app.services.script_analysis_flow.environment_layout import (
     LayoutError,
     _box_edges,
     _cameras,
+    apply_facing,
     boxes_from_layout_payload,
     boxes_from_layout_script,
     extract_layout_script,
+    facing_by_name,
+    facing_tip,
+    layout_messages,
     layout_script_from_model_text,
     layout_script_gaps,
-    layout_messages,
     parse_layout_boxes,
     parse_layout_model_text,
     project_point,
@@ -65,6 +68,37 @@ def test_opening_boxes_keep_locked_meters():
     assert not any(box.name == "梁架天花" for box in boxes)
     assert meta["focal"] == 35
     assert meta["spans"][0] == 4
+    assert table.face == "上"
+    assert chair.face == "南"
+    assert north.face == ""
+    tip = facing_tip(chair)
+    assert tip is not None and tip[1] < chair.cy - chair.sy / 2
+    top = facing_tip(table)
+    assert top is not None and top[2] > table.cz + table.sz / 2
+    assert facing_tip(north) is None
+
+
+def test_facing_mark_follows_the_opening():
+    assert facing_by_name("[@巨幕]号=#1｜屏面朝向=西｜距原点=北0米东2米。")["巨幕"] == "西"
+    assert facing_by_name("[@石柱]号=#1｜朝向=无｜距原点=北1米东0米。")["石柱"] == ""
+    assert facing_by_name("抹灰墙号=#7｜室内面朝向=南｜距原点=北4米东0米。")["抹灰墙"] == ""
+    assert facing_by_name("[@控制台]号=#1｜朝向=朝上｜屏面朝向=北｜距原点=北0米东0米。")["控制台"] == "北"
+    script = apply_facing(
+        "\n".join([
+            "FOCAL_MM = 35",
+            'mass("会议桌", "furniture", east=0, north=0, along_east=1.2, along_north=2.4, height=0.75, bottom=0)',
+            'mass("主位转椅", "furniture", east=0, north=1.9, along_east=0.6, along_north=0.6, height=0.9, bottom=0, face="东")',
+            'mass("抹灰墙", "wall", east=0, north=4, along_east=7, along_north=0.2, height=3.2, bottom=0, face="南")',
+        ]),
+        OPENING,
+    )
+    boxes, _meta = boxes_from_layout_script(script)
+    assert _named(boxes, "会议桌").face == "上"
+    assert _named(boxes, "主位转椅").face == "南"
+    assert _named(boxes, "抹灰墙").face == ""
+    assert 'face="东"' not in script
+    assert 'face="南"' in script
+    assert "face=" in layout_messages(OPENING)[0]["content"]
 
 
 def test_box_edges_are_the_twelve_sides():

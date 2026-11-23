@@ -1108,9 +1108,14 @@ def test_post_env_steps_are_framing_then_staging():
         _subskill_action_label,
     )
 
-    assert [step for step, _ in SCENE_SUBSKILL_POST_ENV_STEPS] == ["derived_framing", "staging"]
-    assert SCENE_SUBSKILL_POST_ENV_STEPS[0][1] == FRAMING_PROMPT
-    assert SCENE_SUBSKILL_POST_ENV_STEPS[1][1] == STAGING_PROMPT
+    assert [step for step, _ in SCENE_SUBSKILL_POST_ENV_STEPS] == [
+        "world_layout",
+        "derived_framing",
+        "staging",
+    ]
+    assert SCENE_SUBSKILL_POST_ENV_STEPS[0][1].endswith("scene_planning_1_subskill_world_layout.md")
+    assert SCENE_SUBSKILL_POST_ENV_STEPS[1][1] == FRAMING_PROMPT
+    assert SCENE_SUBSKILL_POST_ENV_STEPS[2][1] == STAGING_PROMPT
     framing_req = _build_subskill_request(
         {"project_id": 258, "episode_id": 1, "prompt_file": STAGING_PROMPT, "action_name": "建置与入戏"},
         prompt_file=FRAMING_PROMPT,
@@ -1119,7 +1124,7 @@ def test_post_env_steps_are_framing_then_staging():
     )
     assert framing_req.prompt_file == FRAMING_PROMPT
     assert framing_req.action_name == f"{_subskill_action_label(FRAMING_PROMPT)} · EP01_SC01"
-    assert framing_req.action_name.startswith("场景现场编排")
+    assert framing_req.action_name.startswith("拍摄编排")
     assert framing_req.system_prompt is None
     assert framing_req.scene_analysis_mode == "classic"
 

@@ -758,6 +758,256 @@ function stripHttpUrls(text) {
     return body ? cleaned : '';
 }
 
+const WALL_FRACTIONS = [
+    ['十六分之一', 1 / 16],
+    ['八分之一', 1 / 8],
+    ['四分之一', 1 / 4],
+    ['一半', 1 / 2],
+];
+
+const FRACTION_WORD = '十六分之一|八分之一|四分之一|一半';
+
+const CELL_DIR = { 0: '北', 90: '东', 180: '南', 270: '西' };
+
+function wallFraction(ratio) {
+    if (!Number.isFinite(ratio) || ratio <= 0 || ratio > 0.5 + 1e-6) return '';
+    let best = WALL_FRACTIONS[0];
+    let bestDiff = Infinity;
+    WALL_FRACTIONS.forEach((item) => {
+        const diff = Math.abs(ratio - item[1]);
+        if (diff < bestDiff) {
+            best = item;
+            bestDiff = diff;
+        }
+    });
+    return best[0];
+}
+
+function finiteNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
+function wallRecord(box) {
+    const alongEast = finiteNumber(box?.along_east);
+    const alongNorth = finiteNumber(box?.along_north);
+    const east = finiteNumber(box?.east) || 0;
+    const north = finiteNumber(box?.north) || 0;
+    if (alongEast == null || alongNorth == null || alongEast <= 0 || alongNorth <= 0) return null;
+    if (alongNorth < alongEast * 0.5) {
+        return { dir: north >= 0 ? '北' : '南', span: alongEast, east, north, thick: alongNorth };
+    }
+    if (alongEast < alongNorth * 0.5) {
+        return { dir: east >= 0 ? '东' : '西', span: alongNorth, east, north, thick: alongEast };
+    }
+    return null;
+}
+
+function onThisWall(box, wall) {
+    const east = finiteNumber(box?.east);
+    const north = finiteNumber(box?.north);
+    if (east == null || north == null) return false;
+    const gap = wall.dir === '北' || wall.dir === '南'
+        ? Math.abs(north - wall.north)
+        : Math.abs(east - wall.east);
+    return gap <= wall.thick / 2 + 0.8;
+}
+
+function alongThisWall(box, wall) {
+    const along = wall.dir === '北' || wall.dir === '南' ? finiteNumber(box?.along_east) : finiteNumber(box?.along_north);
+    return along && along > 0 ? along : null;
+}
+
+function tableWideDegrees(alongEast, alongNorth) {
+    return alongEast >= alongNorth ? ['0', '180'] : ['90', '270'];
+}
+
+function locksFromBoxes(boxes) {
+    const walls = boxes.map(wallRecord).filter(Boolean);
+    const locks = [];
+    boxes.forEach((box) => {
+        const name = String(box?.name || '').trim();
+        const kind = String(box?.kind || '').trim();
+        if (!name) return;
+        const wall = walls.find((item) => onThisWall(box, item));
+        if ((kind === 'door' || kind === 'furniture') && wall) {
+            const along = alongThisWall(box, wall);
+            const bin = along ? wallFraction(along / wall.span) : '';
+            if (bin) locks.push({ name, role: kind === 'door' ? 'door' : 'cabinet', dir: wall.dir, bin });
+            return;
+        }
+        if (kind === 'furniture' && /[桌案台床榻沙发]/.test(name) && !wall) {
+            const alongEast = finiteNumber(box?.along_east);
+            const alongNorth = finiteNumber(box?.along_north);
+            if (!alongEast || !alongNorth) return;
+            const long = Math.max(alongEast, alongNorth);
+            const short = Math.min(alongEast, alongNorth);
+            locks.push({
+                name,
+                role: 'table',
+                doubled: long >= short * 1.5,
+                wide: tableWideDegrees(alongEast, alongNorth),
+            });
+        }
+    });
+    return locks;
+}
+
+function clauseName(part) {
+    const bracket = part.match(/\[@([^\]]+)\]/);
+    if (bracket) return String(bracket[1] || '').trim();
+    const plain = part.match(/(?:^|[。\n])\s*([^\[\]｜\n]{1,40}?)号=/);
+    return plain ? String(plain[1] || '').trim() : '';
+}
+
+function locksFromOpening(opening) {
+    const text = String(opening || '');
+    const locks = [];
+    ['北', '东', '南', '西'].forEach((dir) => {
+        const section = markedSection(text, `${dir}壁`);
+        const spanMatch = section.match(/开间\s*(\d+(?:\.\d+)?)\s*米/);
+        const span = spanMatch ? Number(spanMatch[1]) : 0;
+        if (!span) return;
+        section.split('。').forEach((part) => {
+            if (/壁关系=墙皮/.test(part)) return;
+            const size = part.match(/占地=沿墙\s*(\d+(?:\.\d+)?)米×高/);
+            if (!size) return;
+            const name = clauseName(part);
+            if (!name) return;
+            const bin = wallFraction(Number(size[1]) / span);
+            if (!bin) return;
+            locks.push({
+                name,
+                role: /壁关系=门洞|扇型=/.test(part) ? 'door' : 'cabinet',
+                dir,
+                bin,
+            });
+        });
+    });
+    const plan = markedSection(text, '六面一次');
+    const tableRe = /\[@([^\]]+)\]([\s\S]{0,240}?)占地=(\d+(?:\.\d+)?)(?:米)?[×x](\d+(?:\.\d+)?)米/g;
+    let found = tableRe.exec(plan);
+    while (found) {
+        const name = String(found[1] || '').trim();
+        const clause = found[2] || '';
+        const alongEast = Number(found[3]);
+        const alongNorth = Number(found[4]);
+        if (name && /[桌案台床榻沙发]/.test(name) && !/沿墙/.test(clause) && alongEast > 0 && alongNorth > 0) {
+            const axis = clause.match(/长边平行=(X线|Y线)/);
+            const wide = axis
+                ? (axis[1] === 'X线' ? ['0', '180'] : ['90', '270'])
+                : tableWideDegrees(alongEast, alongNorth);
+            const long = Math.max(alongEast, alongNorth);
+            const short = Math.min(alongEast, alongNorth);
+            locks.push({ name, role: 'table', doubled: long >= short * 1.5, wide });
+        }
+        found = tableRe.exec(plan);
+    }
+    return locks;
+}
+
+function proportionLocksForEntity(entity) {
+    const boxes = readAttrs(entity).layout_boxes;
+    if (Array.isArray(boxes) && boxes.length) return locksFromBoxes(boxes);
+    const opening = [
+        readAttrs(entity).main_environment_opening,
+        entity?.description,
+        entity?.generation_prompt_cn,
+        entity?.prompt,
+    ].map((item) => String(item || '').trim()).filter(Boolean).join('\n');
+    return locksFromOpening(opening);
+}
+
+function mapQuadCells(prompt, visit) {
+    const source = String(prompt || '');
+    const marks = [];
+    const re = /\[(0|90|180|270)度格[^\]]*\]/g;
+    let match = re.exec(source);
+    while (match) {
+        marks.push({ deg: match[1], index: match.index, head: match[0] });
+        match = re.exec(source);
+    }
+    if (!marks.length) return source;
+    let out = source.slice(0, marks[0].index);
+    marks.forEach((mark, index) => {
+        const nextMark = index + 1 < marks.length ? marks[index + 1].index : source.length;
+        const after = source.slice(mark.index + mark.head.length, nextMark);
+        const heading = after.search(/\n【(?:主体外形|色彩说明|定位)】/);
+        const end = heading < 0 ? nextMark : mark.index + mark.head.length + heading;
+        const body = source.slice(mark.index + mark.head.length, end);
+        const tail = source.slice(end, nextMark);
+        out += mark.head + visit(mark.deg, body) + tail;
+    });
+    return out;
+}
+
+function rewriteFront(body, visit) {
+    const start = body.indexOf('正面：');
+    if (start < 0) return body;
+    const rest = body.slice(start);
+    const next = rest.search(/\n(?:左侧面|右侧面|中部|上)：/);
+    const front = next < 0 ? rest : rest.slice(0, next);
+    const tail = next < 0 ? '' : rest.slice(next);
+    return body.slice(0, start) + visit(front) + tail;
+}
+
+function applyTableProportion(body, lock, wide) {
+    if (!body.includes(`[@${lock.name}]`) && !body.includes('台仍是')) return body;
+    let text = wide
+        ? body.replace(/左右只有往后的一半，/g, '')
+        : body.replace(/左右是往后的两倍，/g, '');
+    if (wide && lock.doubled) {
+        text = text.replace(/这一面左右宽、往后窄，(?!左右是往后的两倍)/g, '这一面左右宽、往后窄，左右是往后的两倍，');
+        text = text.replace(/台仍是左右只有往后的一半。/g, '');
+    } else if (wide) {
+        text = text.replace(/左右是往后的两倍，/g, '');
+        text = text.replace(/台仍是左右只有往后的一半。/g, '');
+    } else if (lock.doubled) {
+        text = text.replace(/这一面左右窄、往后长，(?!左右只有往后的一半)/g, '这一面左右窄、往后长，左右只有往后的一半，');
+        text = text.replace(/台仍是左右窄、往后长。/g, '台仍是左右只有往后的一半。');
+    } else {
+        text = text.replace(/左右只有往后的一半，/g, '');
+        text = text.replace(/台仍是左右只有往后的一半。/g, '台仍是左右窄、往后长。');
+    }
+    return text.replace(/[ \t]{2,}/g, ' ').replace(/。{2,}/g, '。');
+}
+
+function placeFraction(front, sentence, marker) {
+    if (front.includes(sentence)) return front;
+    const at = marker ? front.indexOf(marker) : -1;
+    if (at >= 0) return `${front.slice(0, at + marker.length)}${sentence}${front.slice(at + marker.length)}`;
+    const anchor = front.indexOf('本格的门只有');
+    if (anchor >= 0) return `${front.slice(0, anchor)}${sentence}${front.slice(anchor)}`;
+    return `${front.replace(/\s*$/, '')}${sentence}`;
+}
+
+export function applyQuadProportionLocks(prompt, entity) {
+    const locks = proportionLocksForEntity(entity);
+    if (!locks.length) return String(prompt || '');
+    const stripped = String(prompt || '')
+        .replace(new RegExp(`这扇门的宽度大约只有这面墙的(?:${FRACTION_WORD})。`, 'g'), '')
+        .replace(new RegExp(`\\[@[^\\]]+\\]的沿墙长大约只有这面墙的(?:${FRACTION_WORD})。`, 'g'), '');
+    return mapQuadCells(stripped, (deg, body) => {
+        let next = body;
+        locks.filter((lock) => lock.role === 'table').forEach((lock) => {
+            next = applyTableProportion(next, lock, lock.wide.includes(deg));
+        });
+        const dir = CELL_DIR[deg];
+        next = rewriteFront(next, (front) => {
+            let face = front;
+            locks.filter((lock) => lock.dir === dir && face.includes(`[@${lock.name}]`)).forEach((lock) => {
+                if (lock.role === 'door') {
+                    face = placeFraction(face, `这扇门的宽度大约只有这面墙的${lock.bin}。`, '');
+                } else if (lock.role === 'cabinet') {
+                    face = placeFraction(face, `[@${lock.name}]的沿墙长大约只有这面墙的${lock.bin}。`, '两端不到画面边缘。');
+                }
+            });
+            return face;
+        });
+        return next;
+    });
+}
+
 export function quadImagePrompt(text) {
     const raw = stripMainEnvironmentDraftWrapper(text);
     const index = raw.indexOf('【四向拼图】');
@@ -774,7 +1024,7 @@ export function quadImagePrompt(text) {
         .join('\n\n');
 }
 
-export const WHITE_MODEL_QUAD_NOTE = '弱参考：第一张参考图是同一处的白模。格子的分界与这张参考图重合，正中十字仍在画面正中，四格一样大。每一具在本格里的宽、高、占画面的比例照这张白模，近大远小的程度也照它。左上望北，右上望东，左下望南，右下望西。宽面窄面和门的开闭照白模。颜色、材质、纹样和光按后面的文字画，不把白模的灰色、棚光和素模表面画进成图。文字里点名、白模上没有的枕、杯、盏按文字补上。';
+export const WHITE_MODEL_QUAD_NOTE = '弱参考：第一张参考图是同一处的白模。格子的分界与这张参考图重合，正中十字仍在画面正中，四格一样大。每一具在本格里的宽、高、占画面的比例照这张白模，近大远小的程度也照它。左上望北，右上望东，左下望南，右下望西。宽面窄面和门的开闭照白模。门宽对所在墙、贴墙柜的沿墙长对所在墙、台的宽面和窄面，后面的比例档与这张白模是同一套。朝向那一面上的小锥只确认朝向，成图不画这个锥。颜色、材质、纹样和光按后面的文字画，不把白模的灰色、棚光和素模表面画进成图。文字里点名、白模上没有的枕、杯、盏按文字补上。';
 
 const WHITE_MODEL_NOTE_RE = /^(?:弱参考：)?第一张参考图是同一处的白模[\s\S]*?(?=\n\n|$)/;
 
@@ -1044,7 +1294,7 @@ export function mainEnvironmentDesignDescription(entity) {
 export function assetCardIntro(entity) {
     const raw = String(entity?.generation_prompt_cn || entity?.description || '');
     if (isMainEnvironmentEntity(entity) && raw.includes('【四向拼图】')) {
-        return quadImagePrompt(raw);
+        return applyQuadProportionLocks(quadImagePrompt(raw), entity);
     }
     return stripMainEnvironmentDraftWrapper(raw);
 }

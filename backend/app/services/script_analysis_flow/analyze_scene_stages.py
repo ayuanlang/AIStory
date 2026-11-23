@@ -295,6 +295,8 @@ _SUBSKILL_RESULT_STEP_KEYS = {
     "vfx": "combat",
     "xian": "combat",
     "derived_framing": "framing",
+    "world_layout": "layout",
+    "layout": "layout",
     "staging": "staging",
 }
 

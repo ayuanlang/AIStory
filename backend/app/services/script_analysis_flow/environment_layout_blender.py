@@ -54,6 +54,7 @@ CLAY = {{
     "window": make_material("Window", (0.62, 0.70, 0.74)),
     "ramp": make_material("Ramp", (0.90, 0.89, 0.86)),
 }}
+MARK = make_material("Facing", (0.72, 0.16, 0.12))
 
 MADE = []
 
@@ -70,7 +71,7 @@ def add_box(name, kind, east, north, bottom, along_east, along_north, height):
     bpy.context.scene.collection.objects.link(obj)
     return obj
 
-def mass(name, kind, east, north, along_east, along_north, height, bottom=0, state="", low_east=None, low_north=None, high_east=None, high_north=None, low_z=0, high_z=None):
+def mass(name, kind, east, north, along_east, along_north, height, bottom=0, state="", face="", low_east=None, low_north=None, high_east=None, high_north=None, low_z=0, high_z=None):
     obj = add_box(str(name), str(kind), float(east), float(north), float(bottom), float(along_east), float(along_north), float(height))
     MADE.append({{
         "name": str(name),
@@ -82,6 +83,7 @@ def mass(name, kind, east, north, along_east, along_north, height, bottom=0, sta
         "along_north": float(along_north),
         "height": float(height),
         "state": str(state or ""),
+        "face": str(face or ""),
         "obj": obj,
     }})
 
@@ -169,6 +171,51 @@ def still_here(item):
         return item["obj"].name in bpy.data.objects
     except ReferenceError:
         return False
+
+def add_facing_mark(item):
+    axis = {{"东": (1.0, 0.0, 0.0), "西": (-1.0, 0.0, 0.0), "北": (0.0, 1.0, 0.0), "南": (0.0, -1.0, 0.0), "上": (0.0, 0.0, 1.0)}}.get(str(item.get("face") or ""))
+    if axis is None or not still_here(item):
+        return
+    ax, ay, az = axis
+    host = item["obj"]
+    local_face = Vector((ax * 0.5, ay * 0.5, az * 0.5))
+    world_face = host.matrix_world @ local_face
+    world_dir = (host.matrix_world.to_3x3() @ Vector((ax, ay, az)))
+    if world_dir.length < 1e-6:
+        return
+    world_dir = world_dir.normalized()
+    if az:
+        span = min(item["along_east"], item["along_north"])
+    elif ay:
+        span = min(item["along_east"], item["height"])
+    else:
+        span = min(item["along_north"], item["height"])
+    length = max(0.08, min(0.28, float(span) * 0.42))
+    radius = max(0.035, min(0.11, length * 0.42))
+    mesh = bpy.data.meshes.new(item["name"] + "朝向")
+    tool = bmesh.new()
+    bmesh.ops.create_cone(tool, cap_ends=True, segments=8, radius1=radius, radius2=0.0, depth=length)
+    quat = Vector((0.0, 0.0, 1.0)).rotation_difference(world_dir)
+    bmesh.ops.rotate(tool, verts=list(tool.verts), cent=Vector((0.0, 0.0, 0.0)), matrix=quat.to_matrix().to_4x4())
+    tool.to_mesh(mesh)
+    tool.free()
+    mark = bpy.data.objects.new(item["name"] + "朝向", mesh)
+    mark.location = world_face + world_dir * (length / 2.0)
+    mark.data.materials.append(MARK)
+    bpy.context.scene.collection.objects.link(mark)
+    item["mark"] = mark
+
+for item in list(MADE):
+    add_facing_mark(item)
+bpy.context.view_layer.update()
+
+def set_hidden(item, hidden):
+    item["obj"].hide_render = hidden
+    item["obj"].hide_set(hidden)
+    mark = item.get("mark")
+    if mark is not None:
+        mark.hide_render = hidden
+        mark.hide_set(hidden)
 
 meshes = [obj for obj in bpy.data.objects if obj.type == "MESH"]
 if not meshes:
@@ -430,14 +477,12 @@ if hasattr(shading, "background_color"):
 
 for name, location, target, hidden in posts:
     for item in hidden:
-        item["obj"].hide_render = True
-        item["obj"].hide_set(True)
+        set_hidden(item, True)
     scene.camera = camera(name, location, target)
     scene.render.filepath = os.path.join(OUT, name + ".png")
     bpy.ops.render.render(write_still=True)
     for item in hidden:
-        item["obj"].hide_render = False
-        item["obj"].hide_set(False)
+        set_hidden(item, False)
 """
 
 

@@ -25,6 +25,7 @@ import {
     stripProjectStyleInjection,
     applyWhiteModelQuadReference,
     quadImagePrompt,
+    applyQuadProportionLocks,
 } from './derivedGridRegen.js';
 
 describe('saved quad cells', () => {
@@ -592,6 +593,83 @@ describe('quad image prompt', () => {
     });
 });
 
+describe('locked quad proportions', () => {
+    const cells = [
+        '[0度格-左上·北]',
+        '正面：远处那一整面是[@铆接冷轧钢板墙皮]（N-001），[@双联密锁防爆壁柜]（N-002）都在这张墙上。同面序在中段，两端不到画面边缘。本格没有门。',
+        '中部：[@保险台]（M-001）靠近镜头的是宽的一面。这一面左右宽、往后窄，左右两端外面还看得见地面。',
+        '[90度格-右上·东]',
+        '正面：远处那一整面是[@无缝冷轧钢板墙皮]（E-001）。台仍是左右窄、往后长。本格没有门。',
+        '中部：[@保险台]（M-001）靠近镜头的是窄的一面。这一面左右窄、往后长，左右两边外面还看得见地面。',
+        '[180度格-左下·南]',
+        '正面：远处那一整面是[@拼缝冷轧钢板墙皮]（S-001），[@防爆金属门]（S-002）都在这张墙上。这扇门的宽度大约只有这面墙的四分之一。本格的门只有上面点到的。',
+        '中部：[@保险台]（M-001）靠近镜头的是宽的一面。这一面左右宽、往后窄，左右是往后的两倍，左右两端外面还看得见地面。',
+        '[270度格-右下·西]',
+        '正面：远处那一整面是[@加厚冷轧钢板墙皮]（W-001）。台仍是左右只有往后的一半。本格没有门。',
+        '中部：[@保险台]（M-001）靠近镜头的是窄的一面。这一面左右窄、往后长，左右只有往后的一半，左右两边外面还看得见地面。',
+        '【主体外形】',
+        '[@保险台]（M-001）外形=实心台体。',
+    ].join('\n');
+
+    const boxes = [
+        { name: '铆接冷轧钢板墙皮', kind: 'wall', east: 0, north: 3.75, along_east: 6.5, along_north: 0.2, height: 2.9 },
+        { name: '双联密锁防爆壁柜', kind: 'furniture', east: 0, north: 3.55, along_east: 3.0, along_north: 0.4, height: 2.0 },
+        { name: '拼缝冷轧钢板墙皮', kind: 'wall', east: 0, north: -3.75, along_east: 6.5, along_north: 0.2, height: 2.9 },
+        { name: '防爆金属门', kind: 'door', east: 0, north: -3.75, along_east: 1.0, along_north: 0.2, height: 2.9 },
+        { name: '保险台', kind: 'furniture', east: 0, north: 0, along_east: 1.8, along_north: 0.9, height: 0.75 },
+    ];
+
+    const opening = [
+        '【六面一次】',
+        '[@保险台]号=#4｜长边平行=X线｜占地=1.8×0.9米。',
+        '【北壁】',
+        '尺度=开间6.5米×高2.9米。双联密锁防爆壁柜号=#6｜壁关系=贴墙｜占地=沿墙3.0米×高2.0米×厚0.40米。',
+        '【南壁】',
+        '尺度=开间6.5米×高2.9米。防爆金属门号=#10｜壁关系=门洞｜占地=沿墙1.0米×高2.9米×厚0.20米。',
+    ].join('\n');
+
+    function southDoor(prompt) {
+        const at = prompt.indexOf('[180度格');
+        return prompt.slice(at, prompt.indexOf('[270度格'));
+    }
+
+    it('follows the white-model boxes when they exist', () => {
+        const prompt = applyQuadProportionLocks(cells, {
+            type: 'environment',
+            custom_attributes: { layout_boxes: boxes },
+            description: opening.replace('1.0米', '4.0米'),
+        });
+        assert.match(southDoor(prompt), /这扇门的宽度大约只有这面墙的八分之一。/);
+        assert.doesNotMatch(prompt, /四分之一/);
+        assert.match(prompt, /\[@双联密锁防爆壁柜\]的沿墙长大约只有这面墙的一半。/);
+        assert.equal(prompt.indexOf('沿墙长大约只有') < prompt.indexOf('[90度格'), true);
+        assert.match(prompt.slice(prompt.indexOf('[0度格'), prompt.indexOf('[90度格')), /左右是往后的两倍/);
+        assert.match(prompt.slice(prompt.indexOf('[90度格'), prompt.indexOf('[180度格')), /左右只有往后的一半/);
+        assert.match(prompt, /【主体外形】\n\[@保险台\]/);
+    });
+
+    it('uses the opening meters when no white model exists', () => {
+        const prompt = applyQuadProportionLocks(cells, {
+            type: 'environment',
+            description: opening,
+        });
+        assert.match(southDoor(prompt), /八分之一/);
+        assert.match(prompt, /\[@双联密锁防爆壁柜\]的沿墙长大约只有这面墙的一半。/);
+    });
+
+    it('drops the double phrase when the table is shorter than one and a half', () => {
+        const prompt = applyQuadProportionLocks(cells, {
+            type: 'environment',
+            custom_attributes: {
+                layout_boxes: boxes.map((box) => (box.name === '保险台' ? { ...box, along_east: 1.2, along_north: 1.0 } : box)),
+            },
+        });
+        assert.doesNotMatch(prompt, /左右是往后的两倍/);
+        assert.doesNotMatch(prompt, /左右只有往后的一半/);
+        assert.match(prompt, /台仍是左右窄、往后长。/);
+    });
+});
+
 describe('white model reference for the four-grid', () => {
     it('puts the clay sheet first and keeps color in the written prompt', () => {
         const entity = {
@@ -604,6 +682,7 @@ describe('white model reference for the four-grid', () => {
         );
         assert.match(applied.prompt, /^弱参考：第一张参考图是同一处的白模/);
         assert.match(applied.prompt, /占画面的比例照这张白模/);
+        assert.match(applied.prompt, /朝向那一面上的小锥只确认朝向/);
         assert.match(applied.prompt, /颜色、材质、纹样和光按后面的文字画/);
         assert.match(applied.prompt, /【主体外形】青砖墙/);
         assert.deepEqual(applied.refs, [

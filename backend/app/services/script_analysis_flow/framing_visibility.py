@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """After 现场编排, measure each beat's visible range from 景别 and 机位.
 
-The white-model boxes come from 【白模测算】. Blender places the camera and
-ray-casts the clay boxes. The resulting 【可见范围】 is staging's input.
+The white-model boxes come from 【白模测算】. They name which object is where.
+Body points and furniture lips follow ordinary sizes when a box falls outside
+that range. Blender places the camera and ray-casts the clay boxes. The
+resulting 【可见范围】 is staging's input.
 """
 from __future__ import annotations
 
@@ -32,8 +34,6 @@ _STEPS = (
     ("贴身", 0.4),
 )
 _LOOK = {"北": (0.0, 1.0), "南": (0.0, -1.0), "东": (1.0, 0.0), "西": (-1.0, 0.0)}
-_WIDE = {"WS", "EWS"}
-_CLOSE = {"CU", "ECU"}
 
 
 def _fields(line: str) -> Dict[str, str]:
@@ -63,14 +63,100 @@ def _distance(value: str) -> float:
     return _num(text, 1.4)
 
 
-def _field_of(shot_size: str, explicit: str) -> int:
-    if _num(explicit, 0) >= 80 or str(explicit or "").strip() == "84":
-        return 84
-    if _num(explicit, 0) >= 40:
-        return 47
-    if str(shot_size or "").upper() in _WIDE:
-        return 84
-    return 47
+_LEGAL_FIELDS = (8, 18, 29, 47, 84, 107)
+# plain degrees, then degrees marked 略松 / 偏松 / 偏紧 / 勉强. None means 无法.
+_F2_CELLS = {
+    ("贴身", "ECU"): ((18,), (29,)),
+    ("贴身", "CU"): ((47,), ()),
+    ("贴身", "MCU"): ((84,), ()),
+    ("一臂", "ECU"): ((18,), ()),
+    ("一臂", "CU"): ((29, 47), ()),
+    ("一臂", "MCU"): ((84,), ()),
+    ("一臂", "MS"): ((), (107,)),
+    ("两步", "ECU"): ((8, 18), ()),
+    ("两步", "CU"): ((18,), ()),
+    ("两步", "MCU"): ((29,), (47,)),
+    ("两步", "MS"): ((47,), ()),
+    ("两步", "FS"): ((84,), ()),
+    ("两步", "WS"): ((107,), ()),
+    ("三步", "ECU"): ((8,), ()),
+    ("三步", "CU"): ((8,), ()),
+    ("三步", "MCU"): ((18, 29), ()),
+    ("三步", "MS"): ((29, 47), ()),
+    ("三步", "FS"): ((84,), (47,)),
+    ("三步", "WS"): ((84, 107), ()),
+    ("三步", "EWS"): ((107,), ()),
+    ("五步", "CU"): ((8,), ()),
+    ("五步", "MCU"): ((18,), ()),
+    ("五步", "MS"): ((18, 29), ()),
+    ("五步", "FS"): ((29, 47), ()),
+    ("五步", "WS"): ((47, 84), ()),
+    ("五步", "EWS"): ((84, 107), ()),
+    ("十步", "MCU"): ((8,), ()),
+    ("十步", "MS"): ((8, 18), ()),
+    ("十步", "FS"): ((18, 29), ()),
+    ("十步", "WS"): ((29, 47), ()),
+    ("十步", "EWS"): ((84, 107), ()),
+}
+_DEFAULT_BAND = {
+    "ECU": "贴身",
+    "CU": "贴身",
+    "MCU": "一臂",
+    "MS": "两步",
+    "FS": "三步",
+    "WS": "五步",
+    "EWS": "十步",
+}
+_BANDS = ("贴身", "一臂", "两步", "三步", "五步", "十步")
+
+
+def _band_of(meters: float) -> str:
+    if meters <= 0.5:
+        return "贴身"
+    if meters <= 1.0:
+        return "一臂"
+    if meters <= 1.8:
+        return "两步"
+    if meters <= 3.0:
+        return "三步"
+    if meters <= 5.5:
+        return "五步"
+    return "十步"
+
+
+def _legal_field(explicit: str) -> Optional[int]:
+    number = int(round(_num(explicit, 0)))
+    if number in _LEGAL_FIELDS:
+        return number
+    return None
+
+
+def _pick_cell(shot_size: str, band: str) -> Optional[int]:
+    cell = _F2_CELLS.get((band, shot_size))
+    if cell is None:
+        return None
+    plain, marked = cell
+    options = plain or marked
+    if not options:
+        return None
+    if len(options) == 1:
+        return options[0]
+    if shot_size in {"ECU", "CU", "MCU"}:
+        return min(options)
+    return max(options)
+
+
+def _field_of(shot_size: str, explicit: str, distance: float = 1.4) -> int:
+    locked = _legal_field(explicit)
+    if locked is not None:
+        return locked
+    shot_size = str(shot_size or "MS").upper()
+    band = _band_of(distance)
+    chosen = _pick_cell(shot_size, band)
+    if chosen is not None:
+        return chosen
+    fallback = _pick_cell(shot_size, _DEFAULT_BAND.get(shot_size, "两步"))
+    return fallback if fallback is not None else 47
 
 
 def _split_beats(text: str) -> tuple[str, List[tuple[str, str]]]:
@@ -110,9 +196,19 @@ def _box_from(kind: str, fields: Dict[str, str]) -> Optional[Dict[str, Any]]:
         "along_north": max(0.05, _num(fields.get("沿北", ""), 0.4)),
         "height": height,
         "eye": eye,
-        "transparent": fields.get("透", "") == "透" or "玻璃" in name or "水晶" in name,
+        "transparent": (
+            fields.get("透", "") == "透"
+            or fields.get("壳", "") == "透视"
+            or fields.get("实体类", "") == "虚拟"
+            or any(word in name for word in ("玻璃", "水晶", "全息", "投影", "幻影"))
+        ),
         "open_state": fields.get("开闭", ""),
         "relation": relation,
+        "stature": fields.get("体格", ""),
+        "stature_m": _num(fields.get("身高", ""), 0.0),
+        "chest_h": _num(fields.get("胸高", ""), 0.0),
+        "waist_h": _num(fields.get("腰高", ""), 0.0),
+        "knee_h": _num(fields.get("膝高", ""), 0.0),
     }
 
 
@@ -138,7 +234,8 @@ def _camera_from_mirror(fields: Dict[str, str], beat: str) -> Optional[Dict[str,
         "height": _num(fields.get("高", ""), 1.6),
         "look": look,
         "shot_size": shot_size,
-        "field": _field_of(shot_size, fields.get("视场", "")),
+        "field": _field_of(shot_size, fields.get("视场", ""), _distance(fields.get("机位距", ""))),
+        "field_explicit": fields.get("视场", "") if _legal_field(fields.get("视场", "")) else "",
         "subject": fields.get("主拍对象", ""),
         "frame_owner": fields.get("框主", ""),
         "shot_method": fields.get("拍法", ""),
@@ -185,7 +282,8 @@ def _derive_camera(fields: Dict[str, str], beat: str, boxes: Sequence[Dict[str, 
         "height": eye,
         "look": look,
         "shot_size": shot_size,
-        "field": _field_of(shot_size, fields.get("视场", "")),
+        "field": _field_of(shot_size, fields.get("视场", ""), _distance(fields.get("机位距", ""))),
+        "field_explicit": fields.get("视场", "") if _legal_field(fields.get("视场", "")) else "",
         "subject": subject,
         "frame_owner": fields.get("框主", ""),
         "shot_method": fields.get("拍法", ""),
@@ -270,7 +368,13 @@ def parse_framing(text: str) -> Dict[str, Any]:
         camera["shot_method"] = camera.get("shot_method") or merged.get("拍法", "")
         if merged.get("景别"):
             camera["shot_size"] = str(merged.get("景别")).upper()
-            camera["field"] = _field_of(camera["shot_size"], merged.get("视场", "") or str(camera.get("field") or ""))
+        explicit = merged.get("视场", "") or str(camera.get("field_explicit") or "")
+        distance = _distance(merged.get("机位距", ""))
+        if "机位距" not in merged and camera.get("placed"):
+            host = _match_box(str(camera.get("subject") or ""), local)
+            if host is not None:
+                distance = math.hypot(float(camera["east"]) - float(host["east"]), float(camera["north"]) - float(host["north"]))
+        camera["field"] = _field_of(str(camera.get("shot_size") or ""), explicit, distance)
         shots.append(camera)
         beat_boxes[key] = local
     return {"boxes": boxes, "shots": shots, "beat_boxes": beat_boxes}
@@ -364,23 +468,230 @@ def _segment_hits(origin: Sequence[float], target: Sequence[float], box: Dict[st
     return True
 
 
-def _is_seat(person: Dict[str, Any], furniture: Dict[str, Any]) -> bool:
-    if person["kind"] != "人" or furniture["kind"] != "具":
+def _posture(box: Dict[str, Any]) -> str:
+    bottom = float(box["bottom"])
+    height = float(box["height"])
+    if bottom >= 0.25 and height <= 0.55:
+        return "躺"
+    if bottom >= 0.25:
+        return "坐"
+    return "站"
+
+
+def _is_child(box: Dict[str, Any]) -> bool:
+    stature = str(box.get("stature") or "")
+    if "小孩" in stature or "儿童" in stature or "幼儿" in stature:
+        return True
+    if "成人" in stature:
         return False
-    seat = float(furniture["bottom"]) + float(furniture["height"])
-    if abs(float(person["bottom"]) - seat) > 0.08:
-        return False
+    eye = float(box.get("eye") or 0.0)
+    height = float(box["height"])
+    posture = _posture(box)
+    if posture == "站":
+        return height < 1.40 or (0.0 < eye < 1.30)
+    if posture == "坐":
+        return (0.0 < eye < 1.00) or height < 1.05
+    return height < 0.30
+
+
+def _in_band(value: float, low: float, high: float, fallback: float) -> float:
+    if low <= value <= high:
+        return value
+    return fallback
+
+
+def _cover(box: Dict[str, Any]) -> Optional[tuple]:
+    """Functional lip of a common piece: (kind, blocking height, seat height).
+
+    The box only says which object this is. The lip is the ordinary edge that
+    hides a person on the far side. A box height outside that object's range
+    falls back to the ordinary height.
+    """
+    if box.get("kind") != "具":
+        return None
+    name = str(box["name"])
+    top = float(box["bottom"]) + float(box["height"])
+    height = float(box["height"])
+    if any(word in name for word in ("柜台", "吧台", "隔断", "墙")):
+        return None
+    if "柜" in name and not any(word in name for word in ("桌", "案")):
+        return None
+    if any(word in name for word in ("床", "榻")):
+        lip = _in_band(top, 0.40, 0.70, 0.55)
+        return ("床", lip, lip)
+    if "沙发" in name:
+        lip = _in_band(top, 0.75, 1.05, 0.90)
+        return ("沙发", lip, float(box["bottom"]) + 0.42)
+    if "凳" in name and "椅" not in name:
+        lip = _in_band(top, 0.35, 0.55, 0.45)
+        return ("凳", lip, lip)
+    if "椅" in name:
+        if height <= 0.60:
+            lip = _in_band(top, 0.35, 0.60, 0.45)
+            return ("椅", lip, lip)
+        lip = _in_band(top, 0.75, 1.05, 0.90)
+        return ("椅", lip, float(box["bottom"]) + 0.45)
+    if "几" in name and not any(word in name for word in ("桌", "案", "台")):
+        return ("几", _in_band(top, 0.28, 0.55, 0.42), None)
+    if any(word in name for word in ("桌", "案", "台")):
+        return ("桌", _in_band(top, 0.60, 0.85, 0.75), None)
+    return None
+
+
+def _plan_overlap(person: Dict[str, Any], furniture: Dict[str, Any]) -> bool:
     return (
         abs(float(person["east"]) - float(furniture["east"])) <= float(furniture["along_east"]) / 2.0 + 0.2
         and abs(float(person["north"]) - float(furniture["north"])) <= float(furniture["along_north"]) / 2.0 + 0.2
     )
 
 
-def _occluder(camera: Dict[str, Any], box: Dict[str, Any], boxes: Sequence[Dict[str, Any]]) -> str:
+def _is_seat(person: Dict[str, Any], furniture: Dict[str, Any]) -> bool:
+    if person.get("kind") != "人" or furniture.get("kind") != "具":
+        return False
+    if not _plan_overlap(person, furniture):
+        return False
+    top = float(furniture["bottom"]) + float(furniture["height"])
+    bottom = float(person["bottom"])
+    if abs(bottom - top) <= 0.08:
+        return True
+    cover = _cover(furniture)
+    seat = cover[2] if cover is not None else None
+    return seat is not None and abs(bottom - float(seat)) <= 0.12
+
+
+def _physical_body(box: Dict[str, Any]) -> tuple:
+    """Locked 身高 and 眼高 win. A box is used only while it sits in range."""
+    posture = _posture(box)
+    child = _is_child(box)
+    height = float(box["height"])
+    eye = float(box.get("eye") or 0.0)
+    bottom = float(box["bottom"])
+    stature = float(box.get("stature_m") or 0.0)
+    if posture == "站" and 0.70 <= stature <= 2.20 and 0.55 <= eye <= stature:
+        return posture, stature < 1.45, stature, eye, 0.0 if bottom < 0.25 else bottom
+    if posture == "站":
+        if child and 0.70 <= height <= 1.40 and 0.60 <= eye <= 1.30:
+            return posture, child, height, eye, bottom
+        if child:
+            return posture, child, 1.15, 1.05, 0.0
+        if 1.50 <= height <= 1.95 and 1.40 <= eye <= 1.80:
+            return posture, child, height, eye, bottom
+        return posture, child, 1.70, 1.60, 0.0
+    if posture == "坐":
+        seat = 0.45 if bottom > 0.60 else bottom
+        if float(box.get("chest_h") or 0.0) > 0 and eye > 0:
+            return posture, child, stature or height, eye, seat
+        if child and 0.65 <= eye <= 0.95:
+            return posture, child, height, eye, seat
+        if child:
+            return posture, child, 0.85, 0.78, 0.45
+        if 1.05 <= eye <= 1.30:
+            return posture, child, height, eye, seat
+        return posture, child, 1.25, 1.15, 0.45
+    return posture, child, height, eye or bottom + 0.25, bottom
+
+
+def _locked_marks(box: Dict[str, Any], posture: str, height: float, eye: float, bottom: float) -> Optional[Dict[str, float]]:
+    chest = float(box.get("chest_h") or 0.0)
+    waist = float(box.get("waist_h") or 0.0)
+    knee = float(box.get("knee_h") or 0.0)
+    if chest <= 0 or waist <= 0 or knee <= 0 or eye <= 0:
+        return None
+    if posture == "站":
+        return {"头": eye, "胸": chest, "腰": waist, "腿": knee}
+    if posture == "坐":
+        seat = 0.45 if bottom > 0.60 else bottom
+        hip = height * 0.53
+        return {
+            "头": seat + (eye - hip),
+            "胸": seat + (chest - hip),
+            "腰": seat + 0.18,
+            "腿": max(0.12, seat - 0.12),
+        }
+    return None
+
+
+def _body_points(box: Dict[str, Any]) -> List[tuple]:
+    east = float(box["east"])
+    north = float(box["north"])
+    posture, child, height, eye, bottom = _physical_body(box)
+    locked = _locked_marks(box, posture, height, eye, bottom)
+    if locked is not None:
+        marks = locked
+    elif posture == "躺":
+        marks = {
+            "头": bottom + min(0.28, height * 0.7),
+            "胸": bottom + min(0.20, height * 0.5),
+            "腰": bottom + min(0.14, height * 0.35),
+            "腿": bottom + min(0.08, height * 0.2),
+        }
+    elif posture == "坐":
+        seat = 0.45 if bottom > 0.60 else bottom
+        marks = {
+            "头": eye,
+            "胸": eye - (0.12 if child else 0.20),
+            "腰": seat + 0.18,
+            "腿": max(0.12, seat - 0.12),
+        }
+    elif child:
+        marks = {
+            "头": eye,
+            "胸": bottom + height * 0.75,
+            "腰": bottom + height * 0.58,
+            "腿": bottom + height * 0.30,
+        }
+    else:
+        marks = {
+            "头": eye,
+            "胸": eye - 0.22,
+            "腰": eye - 0.50,
+            "腿": min(max(eye - 1.05, bottom + 0.15), eye - 0.35),
+        }
+    if posture != "坐":
+        top = bottom + height
+        marks = {name: z for name, z in marks.items() if bottom - 0.02 <= z <= top + 0.02}
+    return [(name, (east, north, z)) for name, z in (("头", marks.get("头")), ("胸", marks.get("胸")), ("腰", marks.get("腰")), ("腿", marks.get("腿"))) if z is not None]
+
+
+def _plan_between(origin: Sequence[float], target: Sequence[float], box: Dict[str, Any]) -> bool:
+    bounds = (
+        (float(box["east"]) - float(box["along_east"]) / 2.0, float(box["east"]) + float(box["along_east"]) / 2.0),
+        (float(box["north"]) - float(box["along_north"]) / 2.0, float(box["north"]) + float(box["along_north"]) / 2.0),
+    )
+    start = 0.0
+    end = 0.98
+    for axis in range(2):
+        delta = float(target[axis]) - float(origin[axis])
+        lo, hi = bounds[axis]
+        if abs(delta) < 1e-8:
+            if float(origin[axis]) < lo or float(origin[axis]) > hi:
+                return False
+            continue
+        inv = 1.0 / delta
+        near = (lo - float(origin[axis])) * inv
+        far = (hi - float(origin[axis])) * inv
+        if near > far:
+            near, far = far, near
+        start = max(start, near)
+        end = min(end, far)
+        if start > end:
+            return False
+    return True
+
+
+def _point_in_cone(camera: Dict[str, Any], point: Sequence[float]) -> bool:
+    depth, lateral, vertical = _depth_and_lateral(camera["look"], camera, point)
+    if depth <= 0.05:
+        return False
+    half_h, half_v = _half_angles(int(camera["field"]))
+    return abs(lateral) <= depth * half_h and abs(vertical) <= depth * half_v
+
+
+def _occluder(camera: Dict[str, Any], box: Dict[str, Any], boxes: Sequence[Dict[str, Any]], point: Optional[Sequence[float]] = None) -> str:
     if box.get("transparent") or box.get("open_state") in {"全开", "半开"}:
         return ""
     origin = (float(camera["east"]), float(camera["north"]), float(camera["height"]))
-    target = _target(box)
+    target = tuple(point) if point is not None else _target(box)
     for other in boxes:
         if other["name"] == box["name"]:
             continue
@@ -389,6 +700,11 @@ def _occluder(camera: Dict[str, Any], box: Dict[str, Any], boxes: Sequence[Dict[
         if other.get("open_state") in {"全开", "半开"}:
             continue
         if _is_seat(box, other):
+            continue
+        cover = _cover(other) if point is not None else None
+        if cover is not None:
+            if float(target[2]) <= float(cover[1]) + 0.02 and _plan_between(origin, target, other):
+                return str(other["name"])
             continue
         if _segment_hits(origin, target, other):
             return str(other["name"])
@@ -408,36 +724,6 @@ def python_probes(camera: Dict[str, Any], boxes: Sequence[Dict[str, Any]]) -> Li
     return probes
 
 
-def _names(token: str, box: Dict[str, Any]) -> bool:
-    needle = str(token or "")
-    name = str(box["name"])
-    return bool(needle) and (needle == name or needle in name or name in needle)
-
-
-def _in_band(camera: Dict[str, Any], box: Dict[str, Any], boxes: Sequence[Dict[str, Any]]) -> bool:
-    shot_size = str(camera.get("shot_size") or "MS").upper()
-    if shot_size in _WIDE or shot_size == "FS":
-        return True
-    host = _match_box(str(camera.get("subject") or ""), boxes)
-    eye = float(host["eye"]) if host is not None and host.get("eye") else float(camera["height"])
-    top = float(host["bottom"]) + float(host["height"]) if host is not None else eye + 0.2
-    z = _target(box)[2]
-    privileged = _names(str(camera.get("subject") or ""), box) or (
-        camera.get("shot_method") == "过肩" and _names(str(camera.get("frame_owner") or ""), box)
-    )
-    if shot_size in _CLOSE:
-        if privileged and camera.get("shot_method") == "过肩" and _names(str(camera.get("frame_owner") or ""), box):
-            return True
-        if not _names(str(camera.get("subject") or ""), box):
-            return False
-        return abs(z - eye) <= 0.20
-    if shot_size == "MCU":
-        return eye - 0.40 <= z <= top + 0.05 or privileged
-    if eye - 0.70 <= z <= top + 0.15:
-        return True
-    return privileged
-
-
 def classify_shot(camera: Dict[str, Any], boxes: Sequence[Dict[str, Any]], probes: Sequence[Dict[str, Any]]) -> Dict[str, List[str]]:
     by_name = {str(item["name"]): item for item in probes}
     groups = {"可见": [], "镜后": [], "景别外": [], "遮挡": []}
@@ -449,7 +735,26 @@ def classify_shot(camera: Dict[str, Any], boxes: Sequence[Dict[str, Any]], probe
         if depth <= 0.05:
             groups["镜后"].append(str(box["name"]))
             continue
-        if not probe.get("in_frustum") or not _in_band(camera, box, boxes):
+        if not probe.get("in_frustum"):
+            groups["景别外"].append(str(box["name"]))
+            continue
+        if box.get("kind") == "人":
+            shown = []
+            blocker = ""
+            for part, point in _body_points(box):
+                if not _point_in_cone(camera, point):
+                    continue
+                hit = _occluder(camera, box, boxes, point)
+                if hit:
+                    blocker = blocker or hit
+                else:
+                    shown.append(part)
+            if shown:
+                groups["可见"].append(f"{box['name']}{{{','.join(shown)}}}")
+                continue
+            if blocker:
+                groups["遮挡"].append(f"{box['name']}<{blocker}>")
+                continue
             groups["景别外"].append(str(box["name"]))
             continue
         blocker = str(probe.get("occluder") or "")
@@ -472,6 +777,7 @@ def format_block(shots: Sequence[Dict[str, Any]], grouped: Dict[str, Dict[str, L
             "｜".join([
                 f"B{shot['beat']}",
                 f"景别={shot['shot_size']}",
+                f"视场={int(shot['field'])}",
                 f"望={shot['look']}",
                 f"机位=东{_num(str(shot['east'])):.1f}北{_num(str(shot['north'])):.1f}高{_num(str(shot['height'])):.1f}",
                 f"可见={_join(groups['可见'])}",

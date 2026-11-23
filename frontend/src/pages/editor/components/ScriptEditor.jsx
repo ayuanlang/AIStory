@@ -2006,10 +2006,11 @@ const listSceneStartIds = (scriptText) => {
     return ids;
 };
 
-const SCENE_SUBSKILL_EDIT_KINDS = new Set(['drama_opt', 'combat_opt', 'framing_opt', 'staging_opt']);
+const SCENE_SUBSKILL_EDIT_KINDS = new Set(['drama_opt', 'combat_opt', 'layout_opt', 'framing_opt', 'staging_opt']);
 const SCENE_SUBSKILL_RESULT_KEYS = {
     drama_opt: 'drama',
     combat_opt: 'combat',
+    layout_opt: 'layout',
     framing_opt: 'framing',
     staging_opt: 'staging',
 };
@@ -2045,12 +2046,14 @@ const collectStage1NodeOutputsFromSlotMap = (outputs) => {
     return collected;
 };
 
-const SCENE_SUBSKILL_BODY_KEYS = ['staging', 'framing', 'combat', 'drama'];
+const SCENE_SUBSKILL_BODY_KEYS = ['staging', 'framing', 'layout', 'combat', 'drama'];
 const SCENE_SUBSKILL_STEP_FROM_PIPELINE = {
     drama: 'drama',
     combat: 'combat',
     vfx: 'combat',
     xian: 'combat',
+    world_layout: 'layout',
+    layout: 'layout',
     derived_framing: 'framing',
     framing: 'framing',
     staging: 'staging',
@@ -4238,7 +4241,8 @@ const ANALYSIS_STAGE_LABELS = {
     script_opt: { zh: '逐场优化', en: 'Per-Scene Refinement' },
     drama_opt: { zh: '文戏优化', en: 'Drama Refinement' },
     combat_opt: { zh: '武戏增强', en: 'Action Enhancement' },
-    framing_opt: { zh: '场景现场编排', en: 'Floor Staging' },
+    layout_opt: { zh: '物理编排', en: 'World Layout' },
+    framing_opt: { zh: '拍摄编排', en: 'Camera Staging' },
     staging_opt: { zh: '建置入戏', en: 'Staging' },
     extract_assets: { zh: '资产清单', en: 'Asset Inventory' },
     scene_beats: { zh: '场景编排', en: 'Scene Orchestration' },
@@ -4325,10 +4329,11 @@ const collectThisRunDiagnosticSceneAllowlist = (sceneSplitText, canonicalIds, ep
     return expandSceneIdAllowlist(ids, episodePrefix);
 };
 
-const SCENE_MATRIX_CHAIN = ['drama_opt', 'combat_opt', 'framing_opt', 'staging_opt', 'storyboard'];
+const SCENE_MATRIX_CHAIN = ['drama_opt', 'combat_opt', 'layout_opt', 'framing_opt', 'staging_opt', 'storyboard'];
 const SCENE_MATRIX_DOWNSTREAM_GROUPS = {
-    drama_opt: ['drama', 'combat', 'framing', 'staging', 'storyboard'],
-    combat_opt: ['combat', 'framing', 'staging', 'storyboard'],
+    drama_opt: ['drama', 'combat', 'layout', 'framing', 'staging', 'storyboard'],
+    combat_opt: ['combat', 'layout', 'framing', 'staging', 'storyboard'],
+    layout_opt: ['layout', 'framing', 'staging', 'storyboard'],
     framing_opt: ['framing', 'staging', 'storyboard'],
     staging_opt: ['staging', 'storyboard'],
     storyboard: ['storyboard'],
@@ -4336,7 +4341,8 @@ const SCENE_MATRIX_DOWNSTREAM_GROUPS = {
 const SCENE_MATRIX_OUTPUT_LABELS = {
     drama: ['文戏优化稿', 'drama draft'],
     combat: ['武戏增强稿', 'action draft'],
-    framing: ['现场编排稿', 'floor-staging draft'],
+    layout: ['物理编排稿', 'world-layout draft'],
+    framing: ['拍摄编排稿', 'camera-staging draft'],
     staging: ['建置入戏稿', 'blocking draft'],
 };
 
@@ -4361,7 +4367,7 @@ const sceneMatrixOutputLabels = (kind, tFn) => {
 const sceneMatrixKeptOutputLabels = (kind, tFn) => {
     const t = typeof tFn === 'function' ? tFn : (zh) => zh;
     const downstream = new Set(sceneMatrixDownstreamGroups(kind));
-    return ['drama', 'combat', 'framing', 'staging']
+    return ['drama', 'combat', 'layout', 'framing', 'staging']
         .filter((group) => !downstream.has(group))
         .map((group) => SCENE_MATRIX_OUTPUT_LABELS[group])
         .filter(Boolean)
@@ -4372,7 +4378,7 @@ const describeSceneMatrixRerunAccount = (kind, sceneId, startLabel, tFn) => {
     const t = typeof tFn === 'function' ? tFn : (zh) => zh;
     const cleared = sceneMatrixOutputLabels(kind, t);
     const kept = sceneMatrixKeptOutputLabels(kind, t);
-    const clearsDerived = ['drama_opt', 'combat_opt', 'framing_opt'].includes(String(kind || '').trim());
+    const clearsDerived = ['drama_opt', 'combat_opt', 'layout_opt', 'framing_opt'].includes(String(kind || '').trim());
     const lines = [
         t(
             `场次 ${sceneId} 从「${startLabel}」起重跑，该场信息如下：`,
@@ -17591,7 +17597,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const labels = {
                 drama_opt: ['文戏优化', 'Drama Refinement'],
                 combat_opt: ['武戏增强', 'Action Enhancement'],
-                framing_opt: ['场景现场编排', 'Floor Staging'],
+                layout_opt: ['物理编排', 'World Layout'],
+                framing_opt: ['拍摄编排', 'Camera Staging'],
                 staging_opt: ['建置入戏', 'Staging'],
             };
             const [titleZh, titleEn] = labels[stableKind] || ['逐场优化', 'Per-Scene Refinement'];
@@ -33139,6 +33146,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const startFrom = {
             drama_opt: 'drama',
             combat_opt: 'combat',
+            layout_opt: 'layout',
             framing_opt: 'framing',
             staging_opt: 'staging',
         }[stableKind];
@@ -38606,6 +38614,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const sceneMatrixColumns = [
                             { key: 'drama_opt' },
                             { key: 'combat_opt' },
+                            { key: 'layout_opt' },
                             { key: 'framing_opt' },
                             { key: 'staging_opt' },
                             { key: 'storyboard' },
@@ -38618,10 +38627,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             xian: 2,
                             combat: 2,
                             wait_env: 3,
-                            derived_framing: 4,
-                            staging: 5,
-                            wait_env_asset: 5,
-                            completed: 6,
+                            world_layout: 4,
+                            layout: 4,
+                            derived_framing: 5,
+                            framing: 5,
+                            staging: 6,
+                            wait_env_asset: 6,
+                            completed: 7,
                         };
                         const collectDiagnosticSceneRows = () => {
                             const byId = new Map();
@@ -38767,7 +38779,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (thisRunAllowlist.size > 0 && !isSceneIdInAllowlist(id, thisRunAllowlist, episodePrefix)) {
                                     return;
                                 }
-                                const text = [scene?.drama, scene?.combat, scene?.framing, scene?.staging]
+                                const text = [scene?.drama, scene?.combat, scene?.layout, scene?.framing, scene?.staging]
                                     .map((part) => String(part || '').trim())
                                     .filter(Boolean)
                                     .join('\n');
@@ -38899,6 +38911,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const persistKey = {
                                 drama: 'drama',
                                 combat: 'combat',
+                                layout: 'layout',
                                 framing: 'framing',
                                 staging: 'staging',
                             }[group];
@@ -38928,6 +38941,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const groupCalledKeys = {
                                 drama: ['drama'],
                                 combat: ['vfx', 'xian', 'combat'],
+                                layout: ['wait_env', 'world_layout', 'layout'],
                                 framing: ['derived_framing', 'framing'],
                                 staging: ['staging'],
                             }[group] || [];
@@ -38946,7 +38960,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             ].join('\n');
                             // 四宫格未齐只挡住建置。场景现场编排只依赖主环境，自身已完成则成功。
                             const quadWait = !stopped && /环境资产四宫格未齐|等待环境资产四宫格|STAGING_ENVIRONMENT_ASSET_EMPTY|STAGING_ENVIRONMENT_ASSET_TIMEOUT/.test(quadWaitText);
-                            if (quadWait && group === 'framing') {
+                            if (quadWait && (group === 'framing' || group === 'layout')) {
                                 return { ready: true, active: false, failed: false, detail: '' };
                             }
                             if (quadWait && group === 'staging') {
@@ -38961,16 +38975,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             const groupActiveStep = {
                                 drama: ['drama'],
                                 combat: ['vfx', 'xian', 'combat'],
-                                framing: ['wait_env', 'derived_framing', 'framing'],
+                                layout: ['wait_env', 'world_layout', 'layout'],
+                                framing: ['derived_framing', 'framing'],
                                 staging: ['staging', 'wait_env_asset'],
                             }[group] || [];
-                            const doneAfter = { drama: 1, combat: 2, framing: 4, staging: 5 }[group] || 0;
+                            const doneAfter = { drama: 1, combat: 2, layout: 4, framing: 5, staging: 6 }[group] || 0;
                             const failureBlob = [
                                 meta.business_reason,
                                 node?.last_error_message,
                                 node?.last_error_code,
                             ].join('\n');
-                            const markerGroup = /\[DERIVED_FRAMING_OUTPUT_END\]/.test(failureBlob)
+                            const markerGroup = /\[WORLD_LAYOUT_OUTPUT_END\]/.test(failureBlob)
+                                ? 'layout'
+                                : /\[DERIVED_FRAMING_OUTPUT_END\]/.test(failureBlob)
                                 ? 'framing'
                                 : /\[STAGING_ENV_OUTPUT_END\]|STAGING_OUTPUT_INCOMPLETE/.test(failureBlob)
                                     ? 'staging'
@@ -38979,7 +38996,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         : /\[DRAMA_STANDARDIZATION_OUTPUT_END\]/.test(failureBlob)
                                             ? 'drama'
                                             : '';
-                            const markerRank = { drama: 1, combat: 2, framing: 4, staging: 5 }[markerGroup] || 0;
+                            const markerRank = { drama: 1, combat: 2, layout: 4, framing: 5, staging: 6 }[markerGroup] || 0;
                             // A live earlier step must not keep later groups on 已完成 via leftover
                             // called_subskills / persisted text (建置仍显示完成，而文戏还在跑).
                             // Rank 0 (reset to running before current_step lands) still counts.
@@ -39488,7 +39505,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <div className="text-xs font-bold text-white/85">{t('分场节点', 'Per-scene nodes')}</div>
                                     <div className="text-[10px] text-white/35">
-                                        {t('每场一行：文戏、武戏增强、场景现场编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。音效、配乐和名牌在文戏生成，分镜按拍恢复，配乐与烧录再注入。场次列可查看配乐提示词和名牌。', 'One row per scene: drama, action enhancement, floor staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene. Sound effects, score, and nameplates are written in drama, restored by beat for storyboards, then injected again for the score and burn-in. The scene column can view the score prompt and nameplates.')}
+                                        {t('每场一行：文戏、武戏增强、物理编排、拍摄编排、建置入戏、分镜生成。左侧「重跑该场」从文戏优化重跑该场，不跑美术指导与其他分场。单节点重跑仍会按序带起该场后续节点。音效、配乐和名牌在文戏生成，分镜按拍恢复，配乐与烧录再注入。场次列可查看配乐提示词和名牌。', 'One row per scene: drama, action enhancement, world layout, camera staging, blocking, and storyboards. “Rerun This Scene” starts that scene from drama and skips art direction and other scenes. A single-node rerun still continues through later nodes for that scene. Sound effects, score, and nameplates are written in drama, restored by beat for storyboards, then injected again for the score and burn-in. The scene column can view the score prompt and nameplates.')}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
@@ -39505,7 +39522,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                         <div
                             className="min-w-[760px] grid gap-x-1 gap-y-0 items-stretch"
-                            style={{ gridTemplateColumns: 'minmax(8.5rem, 12rem) repeat(5, minmax(7rem, 1fr))' }}
+                            style={{ gridTemplateColumns: 'minmax(8.5rem, 12rem) repeat(6, minmax(7rem, 1fr))' }}
                         >
                             <div className="px-1 pb-2 text-[10px] font-semibold text-white/35">{t('场次', 'Scene')}</div>
                             {sceneMatrixColumns.map((col) => (
@@ -39517,6 +39534,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 const subskillNode = findScenePipelineNode('scene_subskill_scene', row.sceneId);
                                 const dramaState = resolveSceneSubskillGroupState(subskillNode, 'drama', row.sceneId);
                                 const combatState = resolveSceneSubskillGroupState(subskillNode, 'combat', row.sceneId);
+                                const layoutState = resolveSceneSubskillGroupState(subskillNode, 'layout', row.sceneId);
                                 const framingState = resolveSceneSubskillGroupState(subskillNode, 'framing', row.sceneId);
                                 const stagingState = resolveSceneSubskillGroupState(subskillNode, 'staging', row.sceneId);
                                 const shotState = resolveSceneStoryboardState(row.sceneId);
@@ -39561,7 +39579,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     )
                                     && activeEpisode?.id
                                 );
-                                const thisSceneActivelyRunning = cellRunLive && [dramaState, combatState, framingState, stagingState, shotState]
+                                const thisSceneActivelyRunning = cellRunLive && [dramaState, combatState, layoutState, framingState, stagingState, shotState]
                                     .some((state) => Boolean(state?.active) && !state?.parked && !state?.failed);
                                 const canRerunSceneFromDrama = Boolean(
                                     !thisSceneMatrixRerun
@@ -39709,6 +39727,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         </div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(dramaState, cellProps('drama_opt', dramaState))}</div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(combatState, cellProps('combat_opt', combatState))}</div>
+                                        <div className="border-t border-white/5">{renderSceneNodeCell(layoutState, cellProps('layout_opt', layoutState))}</div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(framingState, cellProps('framing_opt', framingState))}</div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(stagingState, cellProps('staging_opt', stagingState))}</div>
                                         <div className="border-t border-white/5">{renderSceneNodeCell(shotState, cellProps('storyboard', shotState, {

@@ -37,6 +37,16 @@ _HEART_RE = re.compile(r"心点=正([北东南西])")
 _OPEN_RE = re.compile(r"开闭=(全开|半开|全关)")
 _HINGE_RE = re.compile(r"铰链端=([东西南北])端")
 _LIFT_RE = re.compile(rf"离平地={_METER}米")
+_SUBJECT_HEAD_RE = re.compile(r"\[@([^\]]+)\]|(?<![@\[])([\u4e00-\u9fffA-Za-z0-9_]{1,24})号=#")
+_FACE_RE = re.compile(r"(椅面朝向|屏面朝向|(?<![室内面])朝向)=(朝上|无|北|东|南|西)")
+_FACE_AXIS = {
+    "东": (1.0, 0.0, 0.0),
+    "西": (-1.0, 0.0, 0.0),
+    "北": (0.0, 1.0, 0.0),
+    "南": (0.0, -1.0, 0.0),
+    "上": (0.0, 0.0, 1.0),
+}
+_FACE_WORDS = {"北": "北", "东": "东", "南": "南", "西": "西", "上": "上", "朝上": "上"}
 
 _NEAR = 0.08
 _ATTACH = 220
@@ -68,6 +78,7 @@ class LayoutBox:
     sz: float
     extra: List[Tuple[Vec3, Vec3]] = field(default_factory=list)
     ramp: Optional[Tuple[float, float, float, float, float, float, float, float]] = None
+    face: str = ""
 
 
 def _nearest_index(pos: int, origins: Sequence[re.Match]) -> Optional[int]:
@@ -114,6 +125,48 @@ def _axis(rel: str, side: str, heart: str, north: float, east: float) -> str:
     if rel in {"墙皮", "门洞", "窗洞", "贴墙", "齐平", "嵌入", "悬挂"}:
         return "x" if abs(north) >= abs(east) else "y"
     return "x"
+
+
+def _normalize_face(value: Any) -> str:
+    return _FACE_WORDS.get(str(value or "").strip(), "")
+
+
+def facing_token(clause: str) -> str:
+    """Compass facing wins. 朝上 is the mark only when nothing points sideways. 朝向=无 has none."""
+    found: Dict[str, str] = {}
+    for key, value in _FACE_RE.findall(str(clause or "")):
+        found[key] = value
+    if found.get("朝向") == "无":
+        return ""
+    for key in ("朝向", "椅面朝向", "屏面朝向"):
+        token = _normalize_face(found.get(key))
+        if token in {"北", "东", "南", "西"}:
+            return token
+    for key in ("朝向", "椅面朝向", "屏面朝向"):
+        if _normalize_face(found.get(key)) == "上":
+            return "上"
+    return ""
+
+
+def facing_by_name(opening: str) -> Dict[str, str]:
+    """Registered name → 北|东|南|西|上. Empty when this subject has no facing."""
+    text = str(opening or "")
+    marks = list(_SUBJECT_HEAD_RE.finditer(text))
+    found: Dict[str, str] = {}
+    for index, mark in enumerate(marks):
+        name = (mark.group(1) or mark.group(2) or "").strip()
+        if not name:
+            continue
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
+        header = text.find("【", mark.end(), end)
+        if header >= 0:
+            end = header
+        face = facing_token(text[mark.end():end])
+        if face:
+            found[name] = face
+        else:
+            found.setdefault(name, "")
+    return found
 
 
 def _furniture_height(name: str) -> float:
@@ -185,6 +238,7 @@ def parse_layout_boxes(opening: str) -> Tuple[List[LayoutBox], dict]:
     openings = _attach(_OPEN_RE, text, origins)
     hinges = _attach(_HINGE_RE, text, origins)
     lifts = _attach(_LIFT_RE, text, origins)
+    face_of = facing_by_name(text)
     wall_m = _WALL_H_RE.search(text)
     wall_h = float(wall_m.group(1)) if wall_m else 2.9
     focal_m = _FOCAL_RE.search(text)
@@ -256,7 +310,7 @@ def parse_layout_boxes(opening: str) -> Tuple[List[LayoutBox], dict]:
             continue
         if kind == "door":
             extra = _swing_lines(east, north, sx, sy, sz, hinge, opening_state)
-        boxes.append(LayoutBox(name, kind, east, north, cz, sx, sy, sz, extra))
+        boxes.append(LayoutBox(name, kind, east, north, cz, sx, sy, sz, extra, face=face_of.get(name, "")))
 
     if not boxes:
         raise LayoutError("开篇里没有可投影的米，画不出布局。")
@@ -642,6 +696,10 @@ def _view_light(forward: Vec3) -> Vec3:
 def _shade(normal: Vec3, light: Vec3, draw_kind: str, tone: str) -> Tuple[int, int, int]:
     if draw_kind == "void":
         return (58, 60, 64)
+    if draw_kind == "mark":
+        lit = max(0.0, _dot(normal, light))
+        shade = 0.55 + 0.45 * lit
+        return tuple(max(0, min(255, int(round(channel * shade)))) for channel in (186, 48, 40))
     lit = max(0.0, _dot(normal, light))
     shade = 0.5 + 0.5 * lit
     gain = 1.0
@@ -746,6 +804,70 @@ def _raster_triangle(
     color[min_y:max_y + 1, min_x:max_x + 1][hit] = rgb
 
 
+def _facing_placement(box: LayoutBox) -> Optional[Tuple[Vec3, Vec3, float, float]]:
+    direction = _FACE_AXIS.get(box.face)
+    if direction is None:
+        return None
+    ax, ay, az = direction
+    if az:
+        span = min(box.sx, box.sy)
+        half = box.sz / 2
+    elif ay:
+        span = min(box.sx, box.sz)
+        half = box.sy / 2
+    else:
+        span = min(box.sy, box.sz)
+        half = box.sx / 2
+    length = max(0.08, min(0.28, span * 0.42))
+    radius = max(0.035, min(0.11, length * 0.42))
+    base = (box.cx + ax * half, box.cy + ay * half, box.cz + az * half)
+    return base, direction, length, radius
+
+
+def facing_tip(box: LayoutBox) -> Optional[Vec3]:
+    placed = _facing_placement(box)
+    if placed is None:
+        return None
+    base, direction, length, _radius = placed
+    return (
+        base[0] + direction[0] * length,
+        base[1] + direction[1] * length,
+        base[2] + direction[2] * length,
+    )
+
+
+def _facing_mark(box: LayoutBox) -> List[Tuple[List[Vec3], Vec3, str]]:
+    placed = _facing_placement(box)
+    if placed is None:
+        return []
+    base, direction, length, radius = placed
+    tip = facing_tip(box)
+    if tip is None:
+        return []
+    ax, ay, az = direction
+    if abs(az) > 0.5:
+        across, up = (radius, 0.0, 0.0), (0.0, radius, 0.0)
+    elif abs(ay) > 0.5:
+        across, up = (radius, 0.0, 0.0), (0.0, 0.0, radius)
+    else:
+        across, up = (0.0, radius, 0.0), (0.0, 0.0, radius)
+    ring = []
+    for sign_u, sign_v in ((1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)):
+        ring.append((
+            base[0] + across[0] * sign_u + up[0] * sign_v,
+            base[1] + across[1] * sign_u + up[1] * sign_v,
+            base[2] + across[2] * sign_u + up[2] * sign_v,
+        ))
+    polygons: List[List[Vec3]] = [[ring[index], ring[(index + 1) % 4], tip] for index in range(4)]
+    polygons.append(ring)
+    marks: List[Tuple[List[Vec3], Vec3, str]] = []
+    for polygon in polygons:
+        oriented = _orient_outward(polygon, (box.cx, box.cy, box.cz))
+        if oriented is not None:
+            marks.append((oriented[0], oriented[1], "mark"))
+    return marks
+
+
 def render_layout_sheet(boxes: Sequence[LayoutBox], meta: Dict[str, Any]) -> Tuple[bytes, int]:
     focal = float(meta["focal"])
     hfov = 2 * math.atan((_SENSOR_MM / 2) / focal)
@@ -753,7 +875,7 @@ def render_layout_sheet(boxes: Sequence[LayoutBox], meta: Dict[str, Any]) -> Tup
     color = np.full((_SHEET[1], _SHEET[0], 3), (108, 108, 110), dtype=np.uint8)
     depth_buf = np.full((_SHEET[1], _SHEET[0]), 1e9, dtype=np.float32)
     cameras = _cameras(meta["spans"], float(meta["wall_h"]), boxes)
-    solids = [(box, _clay_faces(box)) for box in boxes]
+    solids = [(box, _clay_faces(box) + _facing_mark(box)) for box in boxes]
     strokes: List[Tuple[Tuple[int, int, int, int], Tuple[float, float], Tuple[float, float]]] = []
     for (_label, camera, forward), (_name, col, row) in zip(cameras, _VIEWS):
         light = _view_light(forward)
@@ -865,6 +987,7 @@ along_east 是东西向全长，along_north 是南北向全长，单位米。hei
 某一轴写成无限制时，不要把这一具整行删掉。无限制的那一轴写 24，只给白模盒子用。写成米的轴照抄，不改。
 北墙或南墙：沿墙长写入 along_east，厚写入 along_north。东墙或西墙：沿墙长写入 along_north，厚写入 along_east。height 用这一具自己的高，墙皮用墙高，门用门高。bottom=0。
 地面 kind="floor"，height=0.04，bottom=0。两轴都是无限制时 along_east=24，along_north=24。墙皮 kind="wall"。门 kind="door"，窗 kind="window"，并写 state="全关"、"半开"或"全开"，只抄开篇的开闭。
+这一具写了朝向、椅面朝向或屏面朝向，并且不是无，这一行加 face。朝向或椅面朝向是北、东、南、西，face 写这一向。屏面朝向是这四向、而朝向不是这四向，face 写屏面这一向。只有朝上，face="上"。朝向=无，或没写朝向，不加 face。室内面朝向不加 face。
 天空、远景，以及高、厚、沿墙长都没有米的具，不写。
 纹样、颜色、材质不写进脚本。不要加开篇没有的具。
 家具占地三个数时，最后一个是 height。只有长×宽时也要写：台、桌、案 height=0.75，床、榻 height=0.55，椅 height=0.9，凳 height=0.45。写了离平地，bottom 就等于那个米。灯 kind="lamp"。桌、椅、凳、床、台 kind="furniture"。
@@ -873,7 +996,8 @@ along_east 是东西向全长，along_north 是南北向全长，单位米。hei
 四宫格不由你摆。焦段从开篇的毫米数抄进 FOCAL_MM，没有就写 35。
 FOCAL_MM = 35
 mass("注册名", "wall", east=0, north=0, along_east=24, along_north=2, height=12, bottom=0)
-mass("注册名", "door", east=0, north=0, along_east=4, along_north=2, height=6, bottom=0, state="全开")"""
+mass("注册名", "door", east=0, north=0, along_east=4, along_north=2, height=6, bottom=0, state="全开")
+mass("注册名", "furniture", east=0, north=0, along_east=0.6, along_north=0.6, height=0.9, bottom=0, face="南")"""
 
 
 _FOOTPRINT_RE = re.compile(
@@ -1148,6 +1272,7 @@ def boxes_from_layout_payload(data: Dict[str, Any]) -> Tuple[List[LayoutBox], Di
                 sy=along_north,
                 sz=height,
                 ramp=ramp,
+                face=_normalize_face(item.get("face")),
             )
         )
     if not boxes:
@@ -1185,6 +1310,7 @@ _MASS_KEYS = {
     "high_north",
     "low_z",
     "high_z",
+    "face",
 }
 
 
@@ -1242,6 +1368,8 @@ def script_from_boxes(boxes: Sequence[LayoutBox], focal: float = 35) -> str:
                     f"high_z={_script_number(high_z)}",
                 ]
             )
+        if box.face:
+            parts.append("face=" + json.dumps(box.face, ensure_ascii=False))
         lines.append("mass(" + ", ".join(parts) + ")")
     return "\n".join(lines)
 
@@ -1301,12 +1429,43 @@ def boxes_from_layout_script(script: str) -> Tuple[List[LayoutBox], Dict[str, An
             )
             if ramp is not None:
                 kind = "ramp"
-        boxes.append(LayoutBox(name, kind, east, north, bottom + height / 2, along_east, along_north, height, ramp=ramp))
+        boxes.append(
+            LayoutBox(
+                name,
+                kind,
+                east,
+                north,
+                bottom + height / 2,
+                along_east,
+                along_north,
+                height,
+                ramp=ramp,
+                face=_normalize_face(values.get("face")),
+            )
+        )
     if not boxes:
         raise LayoutError("脚本里没有白模。")
     if focal <= 0:
         focal = 35.0
     return boxes, {"focal": focal, "wall_h": 2.9, "spans": (4.0, 4.0, 4.0, 4.0)}
+
+
+def apply_facing(script: str, opening: str) -> str:
+    """Put the opening's facing onto each mass. A subject with no facing loses a guessed face."""
+    faces = facing_by_name(opening)
+    lines: List[str] = []
+    for raw in str(script or "").splitlines():
+        found = _MASS_CALL.match(raw.strip())
+        if found is None:
+            lines.append(raw)
+            continue
+        name = _unquote(found.group("name")).strip()
+        rest = re.sub(r",\s*face\s*=\s*(?:\"[^\"]*\"|'[^']*')", "", found.group("rest") or "")
+        face = faces.get(name, "")
+        if face:
+            rest += ", face=" + json.dumps(face, ensure_ascii=False)
+        lines.append(f"mass({found.group('name')}, {found.group('kind')}{rest})")
+    return "\n".join(lines)
 
 
 def layout_box_records(boxes: Sequence[LayoutBox]) -> List[Dict[str, Any]]:
@@ -1322,6 +1481,8 @@ def layout_box_records(boxes: Sequence[LayoutBox]) -> List[Dict[str, Any]]:
             "along_north": round(box.sy, 3),
             "height": round(box.sz, 3),
         }
+        if box.face:
+            record["face"] = box.face
         if box.ramp is not None:
             low_x, low_y, low_z, high_x, high_y, high_z, _px, _py = box.ramp
             record.update(

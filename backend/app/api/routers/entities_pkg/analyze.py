@@ -1535,6 +1535,8 @@ async def generate_entity_layout(
     )
     from app.services.script_analysis_flow.environment_layout import (
         LayoutError,
+        apply_facing,
+        boxes_from_layout_script,
         layout_box_records,
         layout_messages,
         layout_script_from_model_text,
@@ -1632,6 +1634,8 @@ async def generate_entity_layout(
             gap = layout_script_gaps(opening, layout_boxes)
             if gap:
                 raise LayoutError(gap)
+            script_text = apply_facing(script_text, opening)
+            layout_boxes, _meta = boxes_from_layout_script(script_text)
             return script_text, layout_boxes
 
         def _merge_usage(response):

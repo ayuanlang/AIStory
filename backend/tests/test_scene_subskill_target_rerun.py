@@ -134,8 +134,8 @@ def test_resume_skips_completed_drama_and_starts_at_framing():
         call_vfx=False,
         call_xian=False,
     )
-    assert plan.start_group == "framing"
-    assert plan.skipped_reason == "resume_framing"
+    assert plan.start_group == "layout"
+    assert plan.skipped_reason == "resume_layout"
     assert "drama" in plan.called
     assert persisted_subskill_step_usable("drama", DRAMA_OK)
 
@@ -180,8 +180,8 @@ def test_resume_skips_combat_when_merged_or_legacy_marker_persisted():
         call_vfx=True,
         call_xian=True,
     )
-    assert plan.start_group == "framing"
-    assert plan.skipped_reason == "resume_framing"
+    assert plan.start_group == "layout"
+    assert plan.skipped_reason == "resume_layout"
     assert "combat" in plan.called
 
 
@@ -269,8 +269,8 @@ def test_hydrate_recovers_drama_from_saved_script():
 """
     steps = hydrate_persisted_subskill_steps("EP01_SC01", {}, script)
     plan = resolve_scene_subskill_resume(scene_id="EP01_SC01", steps=steps)
-    assert plan.start_group == "framing"
-    assert plan.skipped_reason == "resume_framing"
+    assert plan.start_group == "layout"
+    assert plan.skipped_reason == "resume_layout"
 
 
 def test_hydrate_ignores_scene_split_without_drama_signals():
@@ -306,8 +306,8 @@ def test_framing_log_recovery_does_not_skip_fresh_drama():
         steps={"drama": DRAMA_OK},
         call_vfx=False,
     )
-    assert after_drama.start_group == "framing"
-    assert should_recover_framing_from_llm_log(after_drama, DRAMA_OK) is True
+    assert after_drama.start_group == "layout"
+    assert should_recover_framing_from_llm_log(after_drama, DRAMA_OK) is False
     assert should_recover_framing_from_llm_log(after_drama, "") is False
 
 
@@ -320,8 +320,8 @@ def test_resume_uses_stripped_persisted_blocks_without_end_markers():
         steps={"drama": DRAMA_STRIPPED},
         call_vfx=False,
     )
-    assert plan.start_group == "framing"
-    assert plan.skipped_reason == "resume_framing"
+    assert plan.start_group == "layout"
+    assert plan.skipped_reason == "resume_layout"
 
 
 def test_staging_output_complete_rejects_framing_fallback():
@@ -420,8 +420,8 @@ def test_timeout_like_error_detects_hard_cancel_and_read_timeout():
 def test_explicit_rerun_cleanup_plan_lists_business_downstream():
     framing_plan = scene_subskill_rerun_cleanup_plan("framing")
     assert scene_subskill_rerun_downstream_steps("framing") == ["framing", "staging"]
-    assert framing_plan["start_label"] == "场景现场编排"
-    assert framing_plan["output_labels"] == ["现场编排稿", "建置入戏稿"]
+    assert framing_plan["start_label"] == "拍摄编排"
+    assert framing_plan["output_labels"] == ["拍摄编排稿", "建置入戏稿"]
     assert framing_plan["clear_derived_env"] is True
     assert framing_plan["clear_workspace_scene"] is False
     staging_plan = scene_subskill_rerun_cleanup_plan("staging")
@@ -435,14 +435,14 @@ def test_scene_rerun_account_lists_every_store():
         scene_id="EP01_SC01",
         plan=plan,
         persist_steps={"drama": DRAMA_OK, "combat": "", "framing": FRAMING_STRIPPED},
-        removed_outputs=["现场编排稿", "建置入戏稿"],
+        removed_outputs=["拍摄编排稿", "建置入戏稿"],
         sanitized_outputs=["文戏稿"],
         workspace={"shots": 3},
         derived_deleted=2,
     )
     text = "\n".join(lines)
-    assert "场次 EP01_SC01 从「场景现场编排」起重跑" in text
-    assert "清空 现场编排稿、建置入戏稿" in text
+    assert "场次 EP01_SC01 从「拍摄编排」起重跑" in text
+    assert "清空 拍摄编排稿、建置入戏稿" in text
     assert "保留 文戏优化稿" in text
     assert "上游无成稿 武戏增强稿" in text
     assert "上游稿已剔除上轮拍内图：文戏稿" in text

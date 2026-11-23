@@ -54,6 +54,7 @@ import {
     mainEnvironmentDesignDescription,
     withMainEnvironmentOpening,
     quadImagePrompt,
+    applyQuadProportionLocks,
     applyWhiteModelQuadReference,
     whiteModelReferenceUrl,
     readSavedGridRegenPrompt,
@@ -4195,7 +4196,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
         setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
         const imagePrompt = isMainEnvironmentEntity(analyzed || entity)
-            ? quadImagePrompt(finalPrompt)
+            ? applyQuadProportionLocks(quadImagePrompt(finalPrompt), analyzed || entity)
             : finalPrompt;
         const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
             imagePrompt,
@@ -7011,7 +7012,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             }
 
             let imagePrompt = (!qualityRegen && !imageEditOnly && isMainEnvironmentEntity(activeEntity))
-                ? quadImagePrompt(effectiveFinalPrompt)
+                ? applyQuadProportionLocks(quadImagePrompt(effectiveFinalPrompt), activeEntity)
                 : effectiveFinalPrompt;
             if (!qualityRegen && !imageEditOnly && whiteModelAsReference && isMainEnvironmentEntity(activeEntity)) {
                 imagePrompt = applyWhiteModelQuadReference(imagePrompt, uniqueRefs, activeEntity).prompt;
@@ -8759,7 +8760,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         { injectIfMissing: true }
                     );
                 let finalPrompt = (!regenPlan && isMainEnvironmentEntity(entity))
-                    ? quadImagePrompt(styledPrompt)
+                    ? applyQuadProportionLocks(quadImagePrompt(styledPrompt), entity)
                     : styledPrompt;
                 if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
                     return { entity, skippedPrompt: true };

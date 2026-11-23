@@ -169,11 +169,13 @@ def _raise_if_parent_task_cancelled() -> None:
 
 DRAMA_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_drama_standardization.md"
 COMBAT_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_combat.md"
+WORLD_LAYOUT_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_world_layout.md"
 FRAMING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_derived_framing.md"
 STAGING_PROMPT = "skills/scene_analysis_feature_stack/scene_planning_1_subskill_staging_env.md"
 # Hard contract: after enhance + main-env splice, these LLM steps are serial and complete.
-PIPELINE_CONTRACT_VERSION = "staging-without-quad-v6"
+PIPELINE_CONTRACT_VERSION = "world-then-camera-v7"
 SCENE_SUBSKILL_POST_ENV_STEPS: Tuple[Tuple[str, str], ...] = (
+    ("world_layout", WORLD_LAYOUT_PROMPT),
     ("derived_framing", FRAMING_PROMPT),
     ("staging", STAGING_PROMPT),
 )
@@ -181,12 +183,14 @@ SCENE_SUBSKILL_POST_ENV_STEPS: Tuple[Tuple[str, str], ...] = (
 _SUBSKILL_ACTION_LABELS = {
     DRAMA_PROMPT: "文戏增强",
     COMBAT_PROMPT: "武戏增强",
-    FRAMING_PROMPT: "场景现场编排",
+    WORLD_LAYOUT_PROMPT: "物理编排",
+    FRAMING_PROMPT: "拍摄编排",
     STAGING_PROMPT: "建置与入戏",
 }
 _SUBSKILL_FUNCTION_NAMES = {
     DRAMA_PROMPT: "script_analysis_scene_subskill_drama",
     COMBAT_PROMPT: "script_analysis_scene_subskill_combat",
+    WORLD_LAYOUT_PROMPT: "script_analysis_scene_subskill_world_layout",
     FRAMING_PROMPT: "script_analysis_scene_subskill_derived_framing",
     STAGING_PROMPT: "script_analysis_scene_subskill_staging",
 }
@@ -196,7 +200,8 @@ _SUBSKILL_STEP_PROGRESS = {
     "vfx": 34.0,
     "xian": 34.0,
     "wait_env": 48.0,
-    "derived_framing": 58.0,
+    "world_layout": 54.0,
+    "derived_framing": 66.0,
     "wait_env_asset": 70.0,
     "staging": 82.0,
 }
@@ -214,6 +219,7 @@ _COMBAT_COMPLETION_MARKERS = (
 _SUBSKILL_COMPLETION_MARKERS = {
     DRAMA_PROMPT: "[DRAMA_STANDARDIZATION_OUTPUT_END]",
     COMBAT_PROMPT: "[COMBAT_SUBSKILL_OUTPUT_END]",
+    WORLD_LAYOUT_PROMPT: "[WORLD_LAYOUT_OUTPUT_END]",
     FRAMING_PROMPT: "[DERIVED_FRAMING_OUTPUT_END]",
     STAGING_PROMPT: "[STAGING_ENV_OUTPUT_END]",
 }
@@ -251,10 +257,13 @@ _SUBSKILL_START_ALIASES = {
     "combat_opt": "combat",
     "vfx": "combat",
     "xian": "combat",
+    "layout": "layout",
+    "layout_opt": "layout",
+    "world_layout": "layout",
     "framing": "framing",
     "framing_opt": "framing",
     "derived_framing": "framing",
-    "wait_env": "framing",
+    "wait_env": "layout",
     "wait_env_asset": "staging",
     "staging": "staging",
     "staging_opt": "staging",
@@ -301,22 +310,25 @@ _PERSISTED_STEP_MARKERS = {
         "[VFX_SUBSKILL_OUTPUT_END]",
         "[XIAN_ATTACK_OUTPUT_END]",
     ),
+    "layout": ("[WORLD_LAYOUT_OUTPUT_END]",),
     "framing": ("[DERIVED_FRAMING_OUTPUT_END]",),
     "staging": ("[STAGING_ENV_OUTPUT_END]",),
 }
 
 
-_SUBSKILL_STEP_ORDER = ("drama", "combat", "framing", "staging")
+_SUBSKILL_STEP_ORDER = ("drama", "combat", "layout", "framing", "staging")
 _SUBSKILL_START_BUSINESS = {
     "drama": "文戏优化",
     "combat": "武戏增强",
-    "framing": "场景现场编排",
+    "layout": "物理编排",
+    "framing": "拍摄编排",
     "staging": "建置入戏",
 }
 _SUBSKILL_OUTPUT_BUSINESS = {
     "drama": "文戏优化稿",
     "combat": "武戏增强稿",
-    "framing": "现场编排稿",
+    "layout": "物理编排稿",
+    "framing": "拍摄编排稿",
     "staging": "建置入戏稿",
 }
 
@@ -335,7 +347,7 @@ def scene_subskill_rerun_cleanup_plan(start_group: str) -> Dict[str, Any]:
         "start_label": _SUBSKILL_START_BUSINESS.get(start_group, "逐场优化"),
         "steps": steps,
         "output_labels": [_SUBSKILL_OUTPUT_BUSINESS[key] for key in steps if key in _SUBSKILL_OUTPUT_BUSINESS],
-        "clear_derived_env": str(start_group or "") in {"drama", "combat", "framing"},
+        "clear_derived_env": str(start_group or "") in {"drama", "combat", "layout", "framing"},
         "clear_workspace_scene": False,
         "clear_shots": True,
     }
@@ -431,7 +443,7 @@ def blank_cleared_steps_in_scene_block(block: str, step_keys: List[str]) -> str:
         if not match:
             return ""
         return f"{text[: match.start()]}{match.group(1)}\n{match.group(3)}{text[match.end() :]}".strip()
-    if "framing" in keys:
+    if "framing" in keys or "layout" in keys:
         text = strip_prior_derived_environment_sections(text)
     if "staging" in keys:
         text = strip_prior_staging_draft(text)
@@ -826,6 +838,9 @@ def seed_scene_block_for_start(
     if group == "staging":
         return _usable("framing") or raw
     if group == "framing":
+        body = _usable("layout") or _usable("combat") or _usable("drama") or raw
+        return strip_environment_planning_sections(body)
+    if group == "layout":
         body = _usable("combat") or _usable("drama") or raw
         return strip_environment_planning_sections(body)
     if group == "combat":
@@ -877,6 +892,16 @@ def _persisted_combat_body(body: str) -> bool:
     )
 
 
+def _layout_body_ready(body: str) -> bool:
+    """Physical layout is the world map, without a derived-environment extract."""
+    text = str(body or "")
+    if "[DERIVED_ENV" in text or "【本场衍生环境名】" in text:
+        return False
+    return "【全场调度】" in text and (
+        "【角色道具世界分布图】" in text or "【角色道具宫格分布图】" in text
+    )
+
+
 def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
     """完成 = 该节点返回标签仍在，或落库正文就是该节点写出的那一版。"""
     body = str(text or "").strip()
@@ -889,6 +914,8 @@ def persisted_subskill_step_usable(step_key: str, text: str) -> bool:
         return _persisted_drama_body(body)
     if key == "combat":
         return _persisted_combat_body(body)
+    if key == "layout":
+        return _layout_body_ready(body)
     if key == "framing":
         return _framing_has_plan_and_extract(body)
     if key == "staging":
@@ -1055,10 +1082,16 @@ def resolve_scene_subskill_resume(
         if failed_group == "drama":
             scene_steps["drama"] = ""
             scene_steps["combat"] = ""
+            scene_steps["layout"] = ""
             scene_steps["framing"] = ""
             scene_steps["staging"] = ""
         elif failed_group == "combat":
             scene_steps["combat"] = ""
+            scene_steps["layout"] = ""
+            scene_steps["framing"] = ""
+            scene_steps["staging"] = ""
+        elif failed_group == "layout":
+            scene_steps["layout"] = ""
             scene_steps["framing"] = ""
             scene_steps["staging"] = ""
         elif failed_group == "framing":
@@ -1069,6 +1102,7 @@ def resolve_scene_subskill_resume(
     drama = str(scene_steps.get("drama") or "").strip()
     combat = str(scene_steps.get("combat") or "").strip()
     framing = str(scene_steps.get("framing") or "").strip()
+    layout = str(scene_steps.get("layout") or "").strip()
     staging = str(scene_steps.get("staging") or "").strip()
     # Scene-split input often has no SPECIAL_SCENE_ANALYSIS yet. After drama,
     # read the persisted block so combat is not skipped on continue/resume.
@@ -1081,14 +1115,14 @@ def resolve_scene_subskill_resume(
         return SceneSubskillResume(
             start_group="done",
             current_block=ready_block,
-            called=("drama", "derived_framing", "staging", "storyboard"),
+            called=("drama", "world_layout", "derived_framing", "staging", "storyboard"),
             skipped_reason="storyboard_persisted",
         )
     if ready_block:
         return SceneSubskillResume(
             start_group="storyboard",
             current_block=ready_block,
-            called=("drama", "derived_framing", "staging"),
+            called=("drama", "world_layout", "derived_framing", "staging"),
             skipped_reason="resume_storyboard",
         )
 
@@ -1102,7 +1136,7 @@ def resolve_scene_subskill_resume(
         return SceneSubskillResume(
             start_group="staging",
             current_block=framing,
-            called=("drama", "derived_framing"),
+            called=("drama", "world_layout", "derived_framing"),
             skipped_reason="resume_staging",
         )
 
@@ -1116,15 +1150,24 @@ def resolve_scene_subskill_resume(
     )
     combat_ready = persisted_subskill_step_usable("combat", combat)
     drama_ready = persisted_subskill_step_usable("drama", drama)
+    layout_ready = persisted_subskill_step_usable("layout", layout)
     if drama_ready and (combat_ready or not needs_combat):
         called = ["drama"]
         if combat_ready:
             called.append("combat")
+        if layout_ready:
+            called.append("world_layout")
+            return SceneSubskillResume(
+                start_group="framing",
+                current_block=layout,
+                called=tuple(called),
+                skipped_reason="resume_framing",
+            )
         return SceneSubskillResume(
-            start_group="framing",
+            start_group="layout",
             current_block=combat if combat_ready else drama,
             called=tuple(called),
-            skipped_reason="resume_framing",
+            skipped_reason="resume_layout",
         )
     if drama_ready and needs_combat:
         return SceneSubskillResume(
@@ -1440,6 +1483,16 @@ def _framing_has_plan_and_extract(source: str) -> bool:
         or "[DERIVED_ENV]" in text
     )
     return has_plan and has_extract
+
+
+def assert_world_layout_ready(text: str, scene_id: str = "") -> str:
+    """Physical layout must carry the world schedule and at least one placement map."""
+    source = str(text or "").strip()
+    sid = str(scene_id or "").strip()
+    has_map = "【角色道具世界分布图】" in source or "【角色道具宫格分布图】" in source
+    if not source or "【全场调度】" not in source or not has_map:
+        raise HTTPException(status_code=422, detail=f"FRAMING_BLOCKED_LAYOUT_EMPTY:{sid}")
+    return source
 
 
 def assert_derived_framing_ready_for_staging(text: str, scene_id: str = "") -> str:
@@ -2044,9 +2097,11 @@ _FAILED_STEP_TO_GROUP = {
     "combat": "combat",
     "vfx": "combat",
     "xian": "combat",
+    "world_layout": "layout",
+    "layout": "layout",
     "derived_framing": "framing",
     "framing": "framing",
-    "wait_env": "framing",
+    "wait_env": "layout",
     "staging": "staging",
     "wait_env_asset": "staging",
     "storyboard": "storyboard",
@@ -2066,7 +2121,7 @@ def scene_failure_current_step(
 ) -> str:
     """Pin a failed scene to the step that was running.
 
-    ``called`` only grows after a step succeeds. A 场景现场编排 failure used
+    ``called`` only grows after a step succeeds. A 拍摄编排 failure used
     to inherit the previous entry, usually 武戏增强, and the matrix painted
     that cell red.
     """
@@ -2125,16 +2180,16 @@ def _scene_subskill_failure_reason(exc: Exception) -> str:
             parts = rest.split(":", 1)
             beat_ids = parts[1].split()[0].rstrip(")'\"") if len(parts) > 1 else ""
         if beat_ids:
-            return f"场景现场编排已返回，但拍 {beat_ids} 缺少宫格分布图，不能进入建置与入戏"
-        return "场景现场编排已返回，但部分拍缺少宫格分布图，不能进入建置与入戏"
+            return f"拍摄编排已返回，但拍 {beat_ids} 缺少宫格分布图，不能进入建置与入戏"
+        return "拍摄编排已返回，但部分拍缺少宫格分布图，不能进入建置与入戏"
     if "STAGING_BLOCKED_FRAMING_INCOMPLETE" in text:
-        return "场景现场编排已返回，但缺少主体定位或衍生环境提取，不能进入建置与入戏"
+        return "拍摄编排已返回，但缺少主体定位或衍生环境提取，不能进入建置与入戏"
     if "STAGING_BLOCKED_ILLEGAL_DERIVED_ENV" in text:
-        return "场景现场编排衍生环境名不合法，不能进入建置与入戏"
+        return "拍摄编排衍生环境名不合法，不能进入建置与入戏"
     if "STAGING_OUTPUT_INCOMPLETE" in text:
         return "建置与入戏未完整返回，已中断，未进入分镜"
     if "STAGING_BLOCKED_FRAMING" in text:
-        return "场景现场编排未完成，不能进入建置与入戏"
+        return "拍摄编排未完成，不能进入建置与入戏"
     if "ROUTING_MISSING" in text:
         return "文戏增强未产出特效宽松评估"
     if "NO_SCENES" in text:
@@ -2943,6 +2998,9 @@ _GRID_MAP_BODY_PREFIXES = (
     "ENV变=",
     "表情换环境评=",
     "过肩配对=",
+    "拍摄借鉴=",
+    "串场借鉴=",
+    "拍法借鉴=",
     "框主=",
     "看=",
     "[DERIVED_ENV:",
@@ -4095,7 +4153,7 @@ def _clean_subskill_llm_config(raw: Any) -> Optional[Dict[str, Any]]:
 
 
 _BEAT_CONTINUATION_PROMPTS = frozenset(
-    {DRAMA_PROMPT, COMBAT_PROMPT, FRAMING_PROMPT, STAGING_PROMPT}
+    {DRAMA_PROMPT, COMBAT_PROMPT, WORLD_LAYOUT_PROMPT, FRAMING_PROMPT, STAGING_PROMPT}
 )
 _BEAT_CONTINUATION_TAIL = 3
 _BEAT_CONTINUATION_ROUNDS = 3
@@ -4737,6 +4795,7 @@ async def _run_derived_framing_then_staging(
     env_catalog: List[Dict[str, Any]],
     called: List[str],
     skip_framing: bool = False,
+    skip_layout: bool = False,
     entity_token_brief: str = "",
     reused_character_names: Optional[List[str]] = None,
 ) -> str:
@@ -4891,11 +4950,14 @@ async def _run_derived_framing_then_staging(
         if occupancy_block:
             framing_input = f"{occupancy_block}\n\n{framing_input}"
     first_step, first_prompt = SCENE_SUBSKILL_POST_ENV_STEPS[0]
-    if first_step != "derived_framing" or first_prompt != FRAMING_PROMPT:
+    if first_step != "world_layout" or first_prompt != WORLD_LAYOUT_PROMPT:
         raise HTTPException(status_code=500, detail="SCENE_SUBSKILL_CONTRACT_INVALID")
+    post_steps = SCENE_SUBSKILL_POST_ENV_STEPS
+    if skip_layout:
+        post_steps = tuple(item for item in post_steps if item[0] != "world_layout")
     current_block = framing_block
     current_input = framing_input
-    for step_name, prompt_file in SCENE_SUBSKILL_POST_ENV_STEPS:
+    for step_name, prompt_file in post_steps:
         if step_name == "staging" and "derived_framing" not in called:
             raise HTTPException(
                 status_code=422,
@@ -4942,6 +5004,20 @@ async def _run_derived_framing_then_staging(
         )
         if step_name == "staging":
             current_block = assert_staging_output_complete(current_block, scene_id)
+        if step_name == "world_layout":
+            current_block = assert_world_layout_ready(current_block, scene_id)
+            current_block = strip_prior_derived_environment_sections(current_block)
+            from app.services.audiovisual_ledger import strip_audiovisual_passthrough
+
+            current_block = strip_audiovisual_passthrough(current_block)
+            current_input = _wrap_single_scene_input(
+                current_block,
+                _comprehensive_for_scene(current_block, comprehensive_info),
+                aspect_tail,
+                framing_token_brief,
+            )
+            if main_env_block:
+                current_input = f"{main_env_block}\n\n{current_input}"
         if step_name == "derived_framing":
             current_block = assert_derived_framing_ready_for_staging(current_block, scene_id)
             ingest_meta = _ingest_derived_environments_after_framing(
@@ -5308,7 +5384,7 @@ async def run_scene_subskill_pipeline(
             raw_steps = lookup_persisted_scene_subskill_steps(persist_map, scene_id) or {}
             has_persisted_step = any(
                 str(raw_steps.get(key) or "").strip()
-                for key in ("drama", "combat", "framing", "staging")
+                for key in ("drama", "combat", "layout", "framing", "staging")
             )
             persist_steps = (
                 hydrate_persisted_subskill_steps(
@@ -5376,6 +5452,7 @@ async def run_scene_subskill_pipeline(
     resume_step_name = {
         "drama": "drama",
         "combat": "combat",
+        "layout": "world_layout",
         "framing": "derived_framing",
         "staging": "staging",
         "storyboard": "storyboard",
@@ -5383,7 +5460,8 @@ async def run_scene_subskill_pipeline(
     resume_step_label = {
         "drama": "文戏增强",
         "combat": "武戏增强",
-        "framing": "场景现场编排",
+        "layout": "物理编排",
+        "framing": "拍摄编排",
         "staging": "建置与入戏",
         "storyboard": "分镜生成",
     }
@@ -5670,7 +5748,7 @@ async def run_scene_subskill_pipeline(
                         called=called,
                     )
 
-                if scene_start not in {"combat", "framing", "staging", "storyboard"}:
+                if scene_start not in {"combat", "layout", "framing", "staging", "storyboard"}:
                     await _run_enhance_step(DRAMA_PROMPT, "drama")
                     special = _special_block_from_text(current_block, scene_id) or special
                     call_vfx, call_xian = _routes_from_special_text(special, scene_id)
@@ -5703,7 +5781,7 @@ async def run_scene_subskill_pipeline(
                             special or current_block,
                             scene_id,
                         )
-                if scene_start not in {"framing", "staging"}:
+                if scene_start not in {"layout", "framing", "staging"}:
                     run_combat = bool(
                         call_vfx
                         or call_xian
@@ -5765,6 +5843,7 @@ async def run_scene_subskill_pipeline(
                     env_catalog=env_catalog,
                     called=called,
                     skip_framing=scene_start == "staging",
+                    skip_layout=scene_start == "framing" and "【全场调度】" in str(current_block or ""),
                     entity_token_brief=str(task.get("entity_token_brief") or ""),
                     reused_character_names=list(task.get("reused_character_names") or []),
                 )
