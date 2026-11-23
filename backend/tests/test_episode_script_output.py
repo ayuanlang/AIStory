@@ -141,7 +141,7 @@ LEDGER_BODY = """- **角色**：
 """
 
 
-def test_extract_official_leaves_thinking_ledger_off_the_page():
+def test_extract_official_copies_thinking_ledger_onto_the_page():
     full = (
         "[EPISODE_SCRIPT_THINKING_START]\n"
         "## -1) 类型执行摘要\n"
@@ -155,8 +155,11 @@ def test_extract_official_leaves_thinking_ledger_off_the_page():
     official = extract_official_episode_script(full)
     assert official.startswith("# 1-工牌错位")
     assert "## 核心重点" in official
-    assert "本集实体定位台账" not in official
-    assert "CHAR|林一 (Lin Yi)" not in official
+    assert "## 本集实体定位台账" in official
+    assert "CHAR|林一 (Lin Yi)" in official
+    assert "PROP|工牌 (Badge)" in official
+    assert "ENV|星澜电梯间 (Xinglan Elevator)" in official
+    assert official.index("## 核心重点") < official.index("## 本集实体定位台账") < official.index("## 场景列表")
     assert "CHAR特质|林一" not in official
     assert "类型执行摘要" not in official
     assert "[SCENES_BLOCK_START]" in official
@@ -198,8 +201,9 @@ def test_extract_official_drops_ledger_ai_and_scene_focus():
     assert "重要情节" not in official
     assert "本集驱动" not in official
     assert "本集AI优势" not in official
-    assert "本集实体定位台账" not in official
-    assert "CHAR|林一" not in official
+    assert "## 本集实体定位台账" in official
+    assert "CHAR|林一 (Lin Yi)" in official
+    assert official.index("## 本集时间") < official.index("## 本集实体定位台账") < official.index("[SCENES_BLOCK_START]")
     assert "进入/退出" not in official
     assert "本场核心重点" not in official
     assert "本场卖点" not in official
@@ -231,9 +235,9 @@ def test_extract_official_drops_repeated_ledger_rows():
         "[EPISODE_SCRIPT_OUTPUT_END]\n"
     )
     official = extract_official_episode_script(duplicated)
-    assert "本集实体定位台账" not in official
-    assert "PROP|工牌" not in official
-    assert "CHAR|林一" not in official
+    assert official.count("## 本集实体定位台账") == 1
+    assert official.count("PROP|工牌") == 1
+    assert "CHAR|林一 (Lin Yi)" in official
     assert "PROP特质|" not in official
     assert "全局道具特性状态表" not in official
     assert "名(EN)" not in official

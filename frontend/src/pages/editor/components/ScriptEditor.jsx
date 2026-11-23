@@ -1752,11 +1752,14 @@ const injectEntityPositionLedger = (official, source) => {
     if (!page) return ledger;
     if (/本集实体定位台账/.test(page)) return page;
     if (!ledger) return page;
-    const core = page.match(/^##\s*核心重点\b[\s\S]*?(?=^##\s+|\[SCENES_BLOCK_START\])/im);
-    if (core && typeof core.index === 'number') {
-        const end = core.index + core[0].length;
+    const insertAfter = (match) => {
+        const end = match.index + match[0].length;
         return `${page.slice(0, end).trim()}\n\n${ledger}\n\n${page.slice(end).trim()}`.trim();
-    }
+    };
+    const time = page.match(/^##\s*本集时间\b[\s\S]*?(?=^##\s+|\[SCENES_BLOCK_START\])/im);
+    if (time && typeof time.index === 'number') return insertAfter(time);
+    const core = page.match(/^##\s*核心重点\b[\s\S]*?(?=^##\s+|\[SCENES_BLOCK_START\])/im);
+    if (core && typeof core.index === 'number') return insertAfter(core);
     const heading = page.match(/^#\s+\S+.*$/m);
     if (heading && typeof heading.index === 'number') {
         const end = heading.index + heading[0].length;

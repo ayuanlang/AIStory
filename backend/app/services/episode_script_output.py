@@ -82,14 +82,15 @@ def strip_episode_script_thinking_blocks(text: str) -> str:
 
 
 _PAGE_KEEP_HEADING = (
-    r"核心重点|核心内容纲要|本集卖点|本集时间|场景列表|剧情一句话|结尾钩子|紧急回收"
+    r"核心重点|核心内容纲要|本集卖点|本集时间|本集实体定位台账|"
+    r"场景列表|剧情一句话|结尾钩子|紧急回收"
 )
 _PAGE_DROP_HEADING = (
     r"-?1\)\s*类型执行摘要|类型执行摘要|剧情连贯自检|娱乐化段子|桥段凝聚汇总|"
     r"分集开局规划|写后核销总表|框架核销清单|大纲逐字分析台账|"
     r"核心卖点（制作指导）|AI 视频研判|预告片框架规划落点|"
     r"全局角色·道具特性状态表|全局角色特性状态表|全局道具特性状态表|"
-    r"本集AI优势应用与劣势回避|本集实体定位台账|场景进入/退出状态总览"
+    r"本集AI优势应用与劣势回避|场景进入/退出状态总览"
 )
 _LEDGER_STOP = (
     r"全局角色|本集场景环境名清单|身份定位|核心重点|核心内容纲要|本集卖点|"
@@ -274,9 +275,42 @@ def dedupe_entity_position_ledger(page: str) -> str:
 
 
 def inject_entity_position_ledger(official: str, source: str) -> str:
-    """Ledger stays in THINKING. Do not copy it onto the analysis script."""
-    del source
-    return str(official or "").strip()
+    """Put 本集实体定位台账 on the script page.
+
+    Models often leave the finished ledger only in THINKING. Saved script
+    content drops that block, so copy it in when OUTPUT omitted it.
+    Place it after 本集时间, or after 核心重点 when that heading is absent.
+    """
+    page = str(official or "").strip()
+    ledger = extract_entity_position_ledger(source)
+    if not page:
+        return ledger
+    if "本集实体定位台账" in page:
+        return page
+    if not ledger:
+        return page
+
+    def _insert_after(match: re.Match[str]) -> str:
+        end = match.end()
+        return f"{page[:end].rstrip()}\n\n{ledger}\n\n{page[end:].lstrip()}".strip()
+
+    time_match = re.search(
+        r"(?ms)^##\s*本集时间\b.*?(?=^##\s+|\[SCENES_BLOCK_START\]|\Z)",
+        page,
+    )
+    if time_match:
+        return _insert_after(time_match)
+    core_match = re.search(
+        r"(?ms)^##\s*核心重点\b.*?(?=^##\s+|\[SCENES_BLOCK_START\]|\Z)",
+        page,
+    )
+    if core_match:
+        return _insert_after(core_match)
+    heading = re.search(r"(?m)^#\s+\S+.*$", page)
+    if heading:
+        end = heading.end()
+        return f"{page[:end]}\n\n{ledger}\n\n{page[end:].lstrip()}".strip()
+    return f"{ledger}\n\n{page}".strip()
 
 
 _SCENE_FOCUS_RE = re.compile(
@@ -291,8 +325,9 @@ _CORE_PROCESS_LINE_RE = re.compile(
 def trim_episode_script_for_page(text: str) -> str:
     """Keep only script-page payload for scene_split / 分场.
 
-    Keeps: title, 核心重点 (卖点 / 契科夫), 本集时间, scenes + beats, handoff, emergency recovery.
-    Drops: writing-logic sections, the entity ledger, AI analysis, per-scene focus repeats.
+    Keeps: title, 核心重点 (卖点 / 契科夫), 本集时间, 本集实体定位台账,
+    scenes + beats, handoff, emergency recovery.
+    Drops: writing-logic sections, AI analysis, per-scene focus repeats.
     """
     source = str(text or "").strip()
     if not source:
@@ -325,11 +360,13 @@ def extract_official_episode_script(text: str) -> str:
     if marked.get("found") and str(marked.get("content") or "").strip():
         cleaned = _strip_legacy_analysis_sections(str(marked.get("content") or ""))
         cleaned = trim_episode_script_for_page(cleaned)
+        cleaned = inject_entity_position_ledger(cleaned, source)
         return dedupe_entity_position_ledger(cleaned) or cleaned
 
     cleaned = strip_episode_script_thinking_blocks(source)
     cleaned = _strip_legacy_analysis_sections(cleaned)
     cleaned = trim_episode_script_for_page(cleaned)
+    cleaned = inject_entity_position_ledger(cleaned, source)
     cleaned = dedupe_entity_position_ledger(cleaned)
     return cleaned.strip() or dedupe_entity_position_ledger(source).strip()
 
