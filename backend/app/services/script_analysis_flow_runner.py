@@ -2,6 +2,7 @@
 """Execute a single script-analysis flow node (sync path)."""
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -11,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.settings import get_script_analysis_flow_config
-from app.models.all_models import Episode, User
+from app.models.all_models import Entity, Episode, User
 from app.schemas.agent import AnalyzeSceneRequest
 from app.services.credit_error import (
     INSUFFICIENT_CREDITS_CODE,
@@ -23,7 +24,7 @@ from app.services.credit_error import (
 from app.services.endpoint_misc import _build_scene_analysis_blocking_failure_detail
 from app.services.project_access import _require_project_access
 from app.services.scene_ai_shots_batch import _start_scene_ai_shots_batch_for_episode
-from app.services.soft_delete import _active_episode_clause
+from app.services.soft_delete import _active_entity_clause, _active_episode_clause
 from app.services.scene_markdown_orchestration import (
     _extract_analysis_text_from_result,
 )
@@ -285,11 +286,115 @@ def _extract_environment_patches(environment_output: str) -> Dict[str, str]:
 
 MIN_SCOPED_NODE_BODY_CHARS = 100
 
-
+_ASSET_DESIGN_JSON_KEYS = {
+    "asset_design_character": ("characters",),
+    "asset_design_prop": ("props",),
+    "asset_design_environment": ("environments", "posters"),
+    "asset_design_environment_quad": ("environments",),
+}
+_ASSET_DESIGN_SCAN_KEYS = {
+    "asset_design_character": ("characters", "props"),
+    "asset_design_prop": ("props",),
+    "asset_design_environment": ("environments", "posters"),
+    "asset_design_environment_quad": ("environments",),
+}
+_ASSET_DESIGN_ENTITY_TYPE = {
+    "characters": "character",
+    "props": "prop",
+    "environments": "environment",
+    "posters": "poster",
+}
 def scoped_node_body_usable(text: Any, min_chars: int = MIN_SCOPED_NODE_BODY_CHARS) -> bool:
     """True when stripped node body is more than an end marker / empty stub."""
     body = str(text or "").strip()
     return len(body) > int(min_chars or MIN_SCOPED_NODE_BODY_CHARS)
+
+
+def _strip_closed_think(text: str) -> str:
+    return re.sub(r"<think>[\s\S]*?</think>", "", str(text or ""), flags=re.IGNORECASE).strip()
+
+
+def _closed_json_object_slice(text: str) -> str:
+    """One object that starts at the first brace and ends the text. A prefix does not count."""
+    source = str(text or "").strip()
+    start = source.find("{")
+    if start < 0:
+        return ""
+    depth = 0
+    in_str = False
+    escape = False
+    for index in range(start, len(source)):
+        ch = source[index]
+        if in_str:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                if source[index + 1 :].strip():
+                    return ""
+                return source[start : index + 1]
+    return ""
+
+
+def _last_json_fence_body(text: str) -> str:
+    """Body of the last closed fence. Empty when there is no fence or the last fence is open."""
+    source = str(text or "")
+    positions = []
+    cursor = 0
+    while True:
+        found = source.find("```", cursor)
+        if found < 0:
+            break
+        positions.append(found)
+        cursor = found + 3
+    if not positions or len(positions) % 2 == 1:
+        return ""
+    return source[positions[-2] + 3 : positions[-1]]
+
+
+def closed_asset_design_json(text: str) -> Dict[str, Any]:
+    """The skill's one JSON object. An unclosed fence or a salvaged prefix is empty."""
+    source = _strip_closed_think(text)
+    if not source:
+        return {}
+    if "```" in source:
+        fenced = _last_json_fence_body(source)
+        body = _closed_json_object_slice(fenced) if fenced else ""
+    else:
+        body = _closed_json_object_slice(source)
+    if not body:
+        return {}
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
+
+
+def asset_design_json_complete(text: str, node_key: str) -> bool:
+    """True when this asset-design node returned one closed JSON object with its root arrays."""
+    keys = _ASSET_DESIGN_JSON_KEYS.get(str(node_key or "").strip())
+    if not keys:
+        return False
+    payload = closed_asset_design_json(text)
+    if not payload:
+        return False
+    return all(isinstance(payload.get(key), list) for key in keys)
 
 
 def _strip_required_completion_marker(text: str, marker: str) -> str:
@@ -449,6 +554,554 @@ def build_script_analysis_retry_api_attempts(
             original_api_id or None,
         )
     return original_api_id, api_attempts
+
+
+def _asset_name_key(name: str) -> str:
+    text = str(name or "").strip().split("｜")[0].split("|")[0]
+    return re.sub(r"\s+", "", text).lower()
+
+
+def _asset_item_name(item: Dict[str, Any]) -> str:
+    return str(item.get("name") or "").strip().split("｜")[0].split("|")[0].strip()
+
+
+def _asset_item_prompt(item: Dict[str, Any]) -> str:
+    return str(item.get("generation_prompt_cn") or "").strip()
+
+
+def _asset_item_ready(item: Any, *, quad: bool) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if not _asset_item_name(item) or not _asset_item_prompt(item):
+        return False
+    if not quad:
+        return True
+    from app.services.script_analysis_flow.derived_env_ingest import quad_cells_prompt_ready
+
+    return quad_cells_prompt_ready(_asset_item_prompt(item))
+
+
+def _closed_objects_in_array(text: str, key: str) -> Tuple[List[Dict[str, Any]], bool]:
+    """Objects whose braces close inside this array. The cut-off tail is dropped."""
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*\[', str(text or ""))
+    if not match:
+        return [], False
+    source = str(text or "")
+    index = match.end()
+    length = len(source)
+    in_str = False
+    escape = False
+    array_depth = 1
+    obj_depth = 0
+    obj_start = None
+    objects: List[Dict[str, Any]] = []
+    while index < length:
+        ch = source[index]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            index += 1
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if array_depth == 1 and obj_depth == 0:
+                obj_start = index
+            obj_depth += 1
+        elif ch == "}":
+            if obj_depth > 0:
+                obj_depth -= 1
+                if obj_depth == 0 and obj_start is not None and array_depth == 1:
+                    try:
+                        parsed = json.loads(source[obj_start : index + 1])
+                    except json.JSONDecodeError:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        objects.append(parsed)
+                    obj_start = None
+        elif ch == "[":
+            if obj_depth == 0:
+                array_depth += 1
+        elif ch == "]":
+            if obj_depth == 0:
+                array_depth -= 1
+                if array_depth == 0:
+                    return objects, True
+        index += 1
+    return objects, False
+
+
+def _asset_design_scan_body(text: str) -> str:
+    """Last fence body, including an unclosed fence. Thinking text stays out."""
+    source = _strip_closed_think(text)
+    if "```" not in source:
+        return source
+    positions = []
+    cursor = 0
+    while True:
+        found = source.find("```", cursor)
+        if found < 0:
+            break
+        positions.append(found)
+        cursor = found + 3
+    if not positions:
+        return source
+    if len(positions) % 2 == 0:
+        body = source[positions[-2] + 3 : positions[-1]]
+    else:
+        body = source[positions[-1] + 3 :]
+    return re.sub(r"^\s*json\b", "", body, count=1, flags=re.IGNORECASE)
+
+
+def collect_complete_asset_design_items(
+    text: str,
+    node_key: str,
+    subjects_json: Any = None,
+) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, bool], bool]:
+    """Closed, named items that already have a prompt. An unclosed last object is left out."""
+    scan_keys = _ASSET_DESIGN_SCAN_KEYS.get(str(node_key or "").strip()) or ()
+    quad = str(node_key or "").strip() == "asset_design_environment_quad"
+    found = {key: [] for key in scan_keys}
+    arrays_closed = {key: False for key in scan_keys}
+    document = closed_asset_design_json(text)
+    document_closed = bool(document) and asset_design_json_complete(text, node_key)
+    if document_closed:
+        for key in scan_keys:
+            rows = document.get(key)
+            arrays_closed[key] = isinstance(rows, list)
+            if isinstance(rows, list):
+                found[key] = [row for row in rows if _asset_item_ready(row, quad=quad)]
+    else:
+        body = _asset_design_scan_body(text)
+        for key in scan_keys:
+            rows, closed = _closed_objects_in_array(body, key)
+            arrays_closed[key] = closed
+            found[key] = [row for row in rows if _asset_item_ready(row, quad=quad)]
+    if isinstance(subjects_json, dict):
+        for key in scan_keys:
+            seen = {_asset_name_key(_asset_item_name(row)) for row in found[key]}
+            for row in subjects_json.get(key) or []:
+                if not _asset_item_ready(row, quad=quad):
+                    continue
+                key_name = _asset_name_key(_asset_item_name(row))
+                if not key_name or key_name in seen:
+                    continue
+                seen.add(key_name)
+                found[key].append(row)
+    return found, arrays_closed, document_closed
+
+
+def _expected_asset_design_names(node_key: str, source_text: str) -> List[str]:
+    text = str(source_text or "")
+    if node_key == "asset_design_character":
+        from app.services.script_analysis_flow.character_asset_brief import parse_char_extract_records
+
+        return [str(row.get("name") or "").strip() for row in parse_char_extract_records(text) if str(row.get("name") or "").strip()]
+    if node_key == "asset_design_prop":
+        from app.services.script_analysis_flow.prop_asset_brief import PROP_ITEM_PATTERN
+
+        names = []
+        seen = set()
+        for match in PROP_ITEM_PATTERN.finditer(text):
+            name = str(match.group(1) or "").strip().split("｜")[0].split("|")[0].strip()
+            key = _asset_name_key(name)
+            if name and key not in seen:
+                seen.add(key)
+                names.append(name)
+        return names
+    if node_key == "asset_design_environment":
+        from app.services.script_analysis_flow.environment_asset_brief import list_main_environment_names
+
+        return list_main_environment_names(text)
+    if node_key == "asset_design_environment_quad":
+        from app.services.script_analysis_flow.derived_env_ingest import list_main_environment_draft_names
+
+        return list_main_environment_draft_names(text)
+    return []
+
+
+def asset_design_roster_gap(
+    node_key: str,
+    source_text: str,
+    accumulated: Dict[str, Dict[str, Dict[str, Any]]],
+    arrays_closed: Dict[str, bool],
+    document_closed: bool,
+    single_name: str = "",
+) -> Dict[str, Any]:
+    """Names still missing after the complete items already in hand."""
+    node_key = str(node_key or "").strip()
+    single = str(single_name or "").strip().split("｜")[0].split("|")[0].strip()
+    expected = [single] if single else _expected_asset_design_names(node_key, source_text)
+    primary = (_ASSET_DESIGN_JSON_KEYS.get(node_key) or ("",))[0]
+    stored = accumulated.get(primary) or {}
+    missing = [name for name in expected if _asset_name_key(name) not in stored]
+    poster_pending = False
+    if node_key == "asset_design_environment" and not single:
+        from app.services.script_analysis_flow.cover_poster_brief import build_cover_poster_brief
+
+        posters = accumulated.get("posters") or {}
+        poster_pending = bool(
+            build_cover_poster_brief(source_text)
+            and not posters
+            and not arrays_closed.get("posters")
+            and not document_closed
+        )
+    needs_full_retry = bool(not expected and not document_closed and not single)
+    return {
+        "missing_names": missing,
+        "poster_pending": poster_pending,
+        "needs_full_retry": needs_full_retry,
+    }
+
+
+def _slice_quad_drafts(text: str, names: List[str]) -> str:
+    from app.services.script_analysis_flow.derived_env_ingest import _DESIGN_BLOCK_RE
+
+    wanted = {_asset_name_key(name) for name in names}
+    blocks = [
+        match.group(0)
+        for match in _DESIGN_BLOCK_RE.finditer(str(text or ""))
+        if _asset_name_key(match.group(1)) in wanted
+    ]
+    return "\n\n".join(blocks)
+
+
+def build_asset_design_supplement_payload(
+    node_key: str,
+    raw_payload: Dict[str, Any],
+    missing_names: List[str],
+    *,
+    poster_only: bool = False,
+    include_poster: bool = True,
+) -> Dict[str, Any]:
+    """Next call carries only the names that are not stored yet."""
+    payload = dict(raw_payload)
+    text = str(payload.get("text") or "")
+    features = dict(payload.get("scene_analysis_features") or {})
+    features["asset_design_only_names"] = list(missing_names)
+    features["asset_design_poster_only"] = bool(poster_only)
+    features["asset_design_include_poster"] = bool(include_poster) and not poster_only
+    if poster_only:
+        features["asset_design_include_poster"] = True
+    payload["scene_analysis_features"] = features
+    payload["skip_episode_persist"] = True
+    node_key = str(node_key or "").strip()
+    if node_key == "asset_design_character" and missing_names:
+        from app.services.script_analysis_flow.character_asset_brief import slice_char_extract_to_names
+
+        sliced = slice_char_extract_to_names(text, missing_names)
+        if sliced:
+            payload["text"] = sliced
+    elif node_key == "asset_design_prop" and missing_names:
+        from app.services.script_analysis_flow.prop_asset_brief import slice_prop_extract_to_names
+
+        sliced = slice_prop_extract_to_names(text, missing_names)
+        if sliced:
+            payload["text"] = sliced
+    elif node_key == "asset_design_environment" and missing_names and not poster_only:
+        from app.services.script_analysis_flow.environment_asset_brief import slice_one_main_environment
+
+        sliced = "\n\n".join(
+            part for part in (slice_one_main_environment(text, name) for name in missing_names) if part
+        )
+        if sliced:
+            payload["text"] = sliced
+    elif node_key == "asset_design_environment_quad" and missing_names:
+        sliced = _slice_quad_drafts(text, missing_names)
+        if sliced:
+            payload["text"] = sliced
+    return payload
+
+
+def _absorb_complete_items(
+    accumulated: Dict[str, Dict[str, Dict[str, Any]]],
+    found: Dict[str, List[Dict[str, Any]]],
+) -> None:
+    for bucket, rows in found.items():
+        slot = accumulated.setdefault(bucket, {})
+        for row in rows:
+            key = _asset_name_key(_asset_item_name(row))
+            if key and key not in slot:
+                slot[key] = row
+
+
+def _subjects_from_accumulated(node_key: str, accumulated: Dict[str, Dict[str, Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+    keys = list(_ASSET_DESIGN_SCAN_KEYS.get(str(node_key or "").strip()) or ())
+    return {key: list((accumulated.get(key) or {}).values()) for key in keys}
+
+
+def _merge_subjects_into_result(result: Any, subjects: Dict[str, List[Dict[str, Any]]]) -> Any:
+    if not isinstance(result, dict):
+        return result
+    updated = dict(result)
+    updated["subjects_json"] = subjects
+    counts = dict(updated.get("subjects_json_count") or {})
+    for key, rows in subjects.items():
+        counts[key] = len(rows)
+    updated["subjects_json_count"] = counts
+    merged_text = json.dumps(subjects, ensure_ascii=False)
+    if isinstance(updated.get("result"), str):
+        updated["result"] = merged_text
+    return updated
+
+
+def _store_complete_design_items(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    found: Dict[str, List[Dict[str, Any]]],
+    quad: bool,
+) -> List[str]:
+    """Write each closed item. Quad updates an existing environment row."""
+    if project_id <= 0 or episode_id <= 0:
+        return []
+    stored: List[str] = []
+    if quad:
+        from app.services.script_analysis_flow.derived_env_ingest import apply_main_environment_quad_prompts
+
+        rows = list((found.get("environments") or []))
+        if not rows:
+            return []
+        applied = apply_main_environment_quad_prompts(
+            db,
+            project_id=int(project_id),
+            episode_id=int(episode_id),
+            rows=rows,
+        )
+        db.commit()
+        return [str(name) for name in (applied.get("updated") or []) if str(name).strip()]
+    rows = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            Entity.episode_id == int(episode_id),
+            _active_entity_clause(),
+        )
+        .all()
+    )
+    for bucket, items in found.items():
+        entity_type = _ASSET_DESIGN_ENTITY_TYPE.get(bucket)
+        if not entity_type:
+            continue
+        for item in items:
+            name = _asset_item_name(item)
+            prompt = _asset_item_prompt(item)
+            key = _asset_name_key(name)
+            if not key:
+                continue
+            existing = None
+            for row in rows:
+                if str(row.type or "").strip().lower() != entity_type:
+                    continue
+                if _asset_name_key(row.name) == key or _asset_name_key(getattr(row, "name_en", "") or "") == key:
+                    existing = row
+                    break
+            deps = item.get("visual_dependencies")
+            if not isinstance(deps, list):
+                deps = []
+            strategy = item.get("dependency_strategy")
+            if not isinstance(strategy, dict):
+                strategy = {}
+            name_en = str(item.get("name_en") or "").strip()
+            if existing is None:
+                entity = Entity(
+                    project_id=int(project_id),
+                    episode_id=int(episode_id),
+                    name=name,
+                    type=entity_type,
+                    description=prompt,
+                    generation_prompt_cn=prompt,
+                    generation_prompt_en=str(item.get("generation_prompt_en") or "").strip() or None,
+                    anchor_description=str(item.get("anchor_description") or "").strip() or None,
+                    name_en=name_en or None,
+                    base_name_en=str(item.get("base_name_en") or "").strip() or None,
+                    atmosphere=str(item.get("atmosphere") or "").strip() or None,
+                    visual_params=str(item.get("visual_params") or "").strip() or None,
+                    narrative_description=prompt,
+                    visual_dependencies=deps,
+                    dependency_strategy=strategy,
+                )
+                db.add(entity)
+                rows.append(entity)
+            else:
+                existing.name = name or existing.name
+                existing.generation_prompt_cn = prompt
+                existing.description = prompt
+                existing.narrative_description = prompt
+                if item.get("generation_prompt_en"):
+                    existing.generation_prompt_en = str(item.get("generation_prompt_en") or "").strip()
+                if item.get("anchor_description"):
+                    existing.anchor_description = str(item.get("anchor_description") or "").strip()
+                if name_en:
+                    existing.name_en = name_en
+                if item.get("base_name_en"):
+                    existing.base_name_en = str(item.get("base_name_en") or "").strip()
+                if item.get("atmosphere"):
+                    existing.atmosphere = str(item.get("atmosphere") or "").strip()
+                if item.get("visual_params"):
+                    existing.visual_params = str(item.get("visual_params") or "").strip()
+                if deps:
+                    existing.visual_dependencies = deps
+                if strategy:
+                    existing.dependency_strategy = strategy
+            stored.append(name)
+    if stored:
+        db.commit()
+    return stored
+
+
+async def _run_asset_design_until_json_complete(
+    *,
+    node_key: str,
+    raw_payload: Dict[str, Any],
+    current_user: User,
+    db: Session,
+    node_project_id: int,
+    node_episode_id: int,
+) -> Any:
+    """Store each closed item, then call again with only the names still missing."""
+    from app.api.routers.prompts.analyze_scene import analyze_scene  # noqa: WPS433
+
+    original_api_id, api_attempts = build_script_analysis_retry_api_attempts(
+        db,
+        raw_payload.get("function_name") or "script_analysis",
+        raw_payload.get("system_api_id"),
+        node_key=node_key,
+    )
+    features = raw_payload.get("scene_analysis_features") if isinstance(raw_payload.get("scene_analysis_features"), dict) else {}
+    single_name = str(features.get("single_entity_name") or "").strip()
+    source_text = str(raw_payload.get("text") or "")
+    quad = node_key == "asset_design_environment_quad"
+    accumulated: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    arrays_closed: Dict[str, bool] = {}
+    document_closed = False
+    result = None
+    max_attempts = len(api_attempts)
+    for attempt, api_id in enumerate(api_attempts, start=1):
+        if attempt == 1:
+            payload = dict(raw_payload)
+            payload["skip_episode_persist"] = True
+        else:
+            gap = asset_design_roster_gap(
+                node_key,
+                source_text,
+                accumulated,
+                arrays_closed,
+                document_closed,
+                single_name=single_name,
+            )
+            poster_only = bool(
+                gap["poster_pending"] and not gap["missing_names"] and not gap["needs_full_retry"]
+            )
+            payload = build_asset_design_supplement_payload(
+                node_key,
+                raw_payload,
+                [] if gap["needs_full_retry"] else list(gap["missing_names"]),
+                poster_only=poster_only,
+                include_poster=bool(gap["poster_pending"] or gap["needs_full_retry"]),
+            )
+        if api_id > 0:
+            payload["system_api_id"] = api_id
+        switched = api_id > 0 and api_id != original_api_id
+        result = await analyze_scene(
+            AnalyzeSceneRequest(**payload),
+            current_user=current_user,
+            db=db,
+            async_mode="0",
+        )
+        result_text = _extract_analysis_text_from_result(result)
+        subjects = result.get("subjects_json") if isinstance(result, dict) else None
+        found, attempt_closed, attempt_document_closed = collect_complete_asset_design_items(
+            result_text,
+            node_key,
+            subjects,
+        )
+        for key, closed in attempt_closed.items():
+            arrays_closed[key] = bool(arrays_closed.get(key) or closed)
+        document_closed = bool(document_closed or attempt_document_closed)
+        stored_names = _store_complete_design_items(
+            db,
+            project_id=node_project_id,
+            episode_id=node_episode_id,
+            found=found,
+            quad=quad,
+        )
+        _absorb_complete_items(accumulated, found)
+        gap = asset_design_roster_gap(
+            node_key,
+            source_text,
+            accumulated,
+            arrays_closed,
+            document_closed,
+            single_name=single_name,
+        )
+        if not gap["missing_names"] and not gap["poster_pending"] and not gap["needs_full_retry"]:
+            subjects_out = _subjects_from_accumulated(node_key, accumulated)
+            merged_text = json.dumps(subjects_out, ensure_ascii=False)
+            result = _merge_subjects_into_result(result, subjects_out)
+            if attempt > 1:
+                logger.info(
+                    "[剧本分析流程] 节点 %s 补跑后名单齐了 | attempt=%s stored=%s switched_api=%s",
+                    node_key,
+                    attempt,
+                    len(stored_names),
+                    switched,
+                )
+            if node_episode_id > 0:
+                persist_episode = (
+                    db.query(Episode)
+                    .filter(Episode.id == int(node_episode_id), _active_episode_clause())
+                    .populate_existing()
+                    .first()
+                )
+                if persist_episode is not None:
+                    from app.services.script_analysis_flow import persist_entity_design_stage
+
+                    persist_entity_design_stage(
+                        db=db,
+                        episode=persist_episode,
+                        result_content=merged_text,
+                    )
+                    result = _mark_analysis_result_persisted(result, int(node_episode_id))
+            return result
+        missing_label = "、".join(list(gap["missing_names"])[:8])
+        if gap["poster_pending"]:
+            missing_label = (missing_label + "、封面海报") if missing_label else "封面海报"
+        logger.warning(
+            "[剧本分析流程] 节点 %s 已入库完整条目，未成功的留下次 | attempt=%s/%s missing=%s stored_now=%s switched_api=%s",
+            node_key,
+            attempt,
+            max_attempts,
+            missing_label or "整段",
+            len(stored_names),
+            switched,
+        )
+        if attempt >= max_attempts:
+            detail = "ASSET_DESIGN_JSON_INCOMPLETE"
+            if missing_label:
+                detail = f"{detail}:{missing_label}"
+            raise HTTPException(status_code=422, detail=detail)
+        if node_project_id > 0 and node_episode_id > 0:
+            upsert_pipeline_node_status(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                script_id=f"episode:{node_episode_id}",
+                node_name=node_key,
+                status="running",
+                progress_percent=15.0,
+                retry_count=attempt,
+                runtime_meta={"business_event": "retry", "business_reason": "完整条目已入库，只补跑未成功的"},
+                error_code="ASSET_DESIGN_JSON_INCOMPLETE",
+                error_message=f"已入库完整条目，只补跑未成功的：{missing_label or '整段'}",
+            )
+            db.commit()
+    raise HTTPException(status_code=422, detail="ASSET_DESIGN_JSON_INCOMPLETE")
 
 
 async def execute_scene_analysis_flow_node(
@@ -906,6 +1559,15 @@ async def execute_scene_analysis_flow_node(
                     node_project_id=node_project_id,
                     node_episode_id=node_episode_id,
                 )
+            elif node_key in _ASSET_DESIGN_JSON_KEYS:
+                result = await _run_asset_design_until_json_complete(
+                    node_key=node_key,
+                    raw_payload=raw_payload,
+                    current_user=current_user,
+                    db=db,
+                    node_project_id=node_project_id,
+                    node_episode_id=node_episode_id,
+                )
             else:
                 result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
         except Exception as exc:
@@ -924,6 +1586,9 @@ async def execute_scene_analysis_flow_node(
                     error_message = error_text or str(exc)
                 elif "ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING" in error_text:
                     error_code = "ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING"
+                    error_message = error_text or str(exc)
+                elif "ASSET_DESIGN_JSON_INCOMPLETE" in error_text:
+                    error_code = "ASSET_DESIGN_JSON_INCOMPLETE"
                     error_message = error_text or str(exc)
                 elif "SCENE_MARKER_BLOCK_MISSING" in error_text:
                     error_code = "SCENE_MARKER_BLOCK_MISSING"

@@ -755,6 +755,28 @@ async def execute_analyze_scene(
                 env_brief = build_environment_asset_design_brief(brief_source)
                 environment_design_name_source = brief_source
                 cover_brief = "" if single_entity_name else build_cover_poster_brief(brief_source)
+                supplement_names = [
+                    str(item).strip()
+                    for item in (_single_features.get("asset_design_only_names") or [])
+                    if str(item).strip()
+                ]
+                if supplement_names and not single_entity_name:
+                    sliced_parts = [
+                        slice_one_main_environment(brief_source, name)
+                        or slice_one_main_environment(request_text, name)
+                        or slice_one_main_environment(picked_plan, name)
+                        for name in supplement_names
+                    ]
+                    sliced_source = "\n\n".join(part for part in sliced_parts if part)
+                    brief_source = sliced_source
+                    environment_design_name_source = brief_source
+                    env_brief = build_environment_asset_design_brief(brief_source) if brief_source else ""
+                    cover_brief = build_cover_poster_brief(brief_source) if brief_source else ""
+                if _single_features.get("asset_design_poster_only") and not single_entity_name:
+                    env_brief = ""
+                    cover_brief = build_cover_poster_brief(picked_plan or request_text or brief_source)
+                if _single_features.get("asset_design_include_poster") is False:
+                    cover_brief = ""
                 user_content = assemble_environment_asset_design_user_content(
                     cover_brief,
                     env_brief,
@@ -847,6 +869,13 @@ async def execute_analyze_scene(
                     )
                     or episode_adaptation_for_scene_beats
                 )
+            supplement_names = [
+                str(item).strip()
+                for item in (_single_features.get("asset_design_only_names") or [])
+                if str(item).strip()
+            ]
+            if supplement_names and not single_entity_name:
+                brief_source = slice_prop_extract_to_names(brief_source or request_text, supplement_names)
             prop_brief = build_prop_asset_design_brief(brief_source)
             user_content = assemble_prop_asset_design_user_content(prop_brief)
             logger.info(
@@ -932,6 +961,13 @@ async def execute_analyze_scene(
                     )
                     or episode_adaptation_for_scene_beats
                 )
+            supplement_names = [
+                str(item).strip()
+                for item in (_single_features.get("asset_design_only_names") or [])
+                if str(item).strip()
+            ]
+            if supplement_names and not single_entity_name:
+                brief_source = slice_char_extract_to_names(brief_source or request_text, supplement_names)
             char_brief = build_character_asset_design_brief(brief_source)
             appearance_block = ""
             try:

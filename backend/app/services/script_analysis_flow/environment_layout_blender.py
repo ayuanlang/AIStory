@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Run a white-model script in Blender and render the four-grid sheet.
 
-The model writes mass() calls. This module supplies the Blender scene, the
-clay materials, and the four cameras: look north, east, south, west.
+The model writes mass() calls. This module supplies the Blender scene and the
+four cameras: look north, east, south, west. The sheet sent to the image model
+is an orientation drawing: black lines on white. A short tab marks the facing
+side. Fill, shadow, and lamp color stay out of this sheet.
 """
 from __future__ import annotations
 
@@ -44,17 +46,12 @@ def make_material(name, color):
     material.diffuse_color = (color[0], color[1], color[2], 1.0)
     return material
 
-CLAY = {{
-    "floor": make_material("Floor", (0.70, 0.69, 0.66)),
-    "wall": make_material("Wall", (0.86, 0.85, 0.82)),
-    "ceiling": make_material("Ceiling", (0.60, 0.60, 0.58)),
-    "furniture": make_material("Furniture", (0.97, 0.96, 0.93)),
-    "lamp": make_material("Lamp", (0.93, 0.90, 0.84)),
-    "door": make_material("Door", (0.48, 0.47, 0.45)),
-    "window": make_material("Window", (0.62, 0.70, 0.74)),
-    "ramp": make_material("Ramp", (0.90, 0.89, 0.86)),
-}}
-MARK = make_material("Facing", (0.72, 0.16, 0.12))
+COLOR_N = [1]
+
+def next_color():
+    n = COLOR_N[0]
+    COLOR_N[0] += 1
+    return (((n * 53) % 200 + 20) / 255.0, ((n * 97) % 200 + 20) / 255.0, ((n * 29) % 200 + 20) / 255.0)
 
 MADE = []
 
@@ -67,7 +64,7 @@ def add_box(name, kind, east, north, bottom, along_east, along_north, height):
     obj = bpy.data.objects.new(name, mesh)
     obj.location = (float(east), float(north), float(bottom) + float(height) / 2)
     obj.scale = (float(along_east), float(along_north), float(height))
-    obj.data.materials.append(CLAY.get(kind, CLAY["furniture"]))
+    obj.data.materials.append(make_material(name, next_color()))
     bpy.context.scene.collection.objects.link(obj)
     return obj
 
@@ -178,31 +175,22 @@ def add_facing_mark(item):
         return
     ax, ay, az = axis
     host = item["obj"]
-    local_face = Vector((ax * 0.5, ay * 0.5, az * 0.5))
-    world_face = host.matrix_world @ local_face
-    world_dir = (host.matrix_world.to_3x3() @ Vector((ax, ay, az)))
+    world_dir = host.matrix_world.to_3x3() @ Vector((ax, ay, az))
     if world_dir.length < 1e-6:
         return
     world_dir = world_dir.normalized()
+    world_face = host.matrix_world @ Vector((ax * 0.5, ay * 0.5, az * 0.5))
     if az:
         span = min(item["along_east"], item["along_north"])
     elif ay:
         span = min(item["along_east"], item["height"])
     else:
         span = min(item["along_north"], item["height"])
-    length = max(0.08, min(0.28, float(span) * 0.42))
-    radius = max(0.035, min(0.11, length * 0.42))
-    mesh = bpy.data.meshes.new(item["name"] + "朝向")
-    tool = bmesh.new()
-    bmesh.ops.create_cone(tool, cap_ends=True, segments=8, radius1=radius, radius2=0.0, depth=length)
-    quat = Vector((0.0, 0.0, 1.0)).rotation_difference(world_dir)
-    bmesh.ops.rotate(tool, verts=list(tool.verts), cent=Vector((0.0, 0.0, 0.0)), matrix=quat.to_matrix().to_4x4())
-    tool.to_mesh(mesh)
-    tool.free()
-    mark = bpy.data.objects.new(item["name"] + "朝向", mesh)
+    length = max(0.12, min(0.45, float(span) * 0.35))
+    thick = max(0.04, min(0.12, float(span) * 0.16))
+    mark = add_box(item["name"] + "朝向", "furniture", 0, 0, -thick / 2.0, length, thick, thick)
     mark.location = world_face + world_dir * (length / 2.0)
-    mark.data.materials.append(MARK)
-    bpy.context.scene.collection.objects.link(mark)
+    mark.rotation_euler = Vector((1.0, 0.0, 0.0)).rotation_difference(world_dir).to_euler()
     item["mark"] = mark
 
 for item in list(MADE):
@@ -371,7 +359,7 @@ def central_subject():
 def interior_pose(look):
     near, far, width, floor_top, height, sideways = opening_for(look)
     ceil = floor_top + height
-    cam_z = min(max(floor_top + 1.05, floor_top + height * 0.68), ceil - 0.22)
+    cam_z = min(max(floor_top + 1.05, min(floor_top + 1.60, floor_top + height * 0.55)), ceil - 0.22)
     subject = central_subject()
     component = look.y if abs(look.y) > 0.5 else look.x
     if subject is None:
@@ -467,13 +455,13 @@ scene.render.image_settings.file_format = "PNG"
 shading = scene.display.shading
 shading.light = "FLAT"
 shading.color_type = "MATERIAL"
-for attr, value in (("show_object_outline", True), ("show_cavity", False), ("show_shadows", True), ("shadow_intensity", 0.25)):
+for attr, value in (("show_object_outline", False), ("show_cavity", False), ("show_shadows", False), ("shadow_intensity", 0.0)):
     if hasattr(shading, attr):
         setattr(shading, attr, value)
 if hasattr(shading, "background_type"):
     shading.background_type = "VIEWPORT"
 if hasattr(shading, "background_color"):
-    shading.background_color = (0.40, 0.40, 0.42)
+    shading.background_color = (1.0, 1.0, 1.0)
 
 for name, location, target, hidden in posts:
     for item in hidden:
@@ -542,8 +530,27 @@ def blender_process_env(exe: str) -> dict:
     return env
 
 
+def orientation_lines(cell: Image.Image) -> Image.Image:
+    """Turn each flat color into a boundary. The fill never reaches the sheet."""
+    rgb = cell.convert("RGB")
+    width, height = rgb.size
+    src = rgb.load()
+    out = Image.new("L", (width, height), 255)
+    dst = out.load()
+    for y in range(height):
+        row = [src[x, y] for x in range(width)]
+        below = [src[x, y + 1] for x in range(width)] if y + 1 < height else None
+        for x, here in enumerate(row):
+            right = row[x + 1] if x + 1 < width else None
+            if right is not None and abs(here[0] - right[0]) + abs(here[1] - right[1]) + abs(here[2] - right[2]) >= 24:
+                dst[x, y] = 0
+            elif below is not None and abs(here[0] - below[x][0]) + abs(here[1] - below[x][1]) + abs(here[2] - below[x][2]) >= 24:
+                dst[x, y] = 0
+    return out.convert("RGB")
+
+
 def render_white_model(script: str) -> bytes:
-    """Render the model's mass() script to one 16:9 four-grid PNG."""
+    """Render the model's mass() script to one 16:9 orientation sheet."""
     exe = blender_executable()
     payload = base64.b64encode(str(script or "").encode("utf-8")).decode("ascii")
     body = _BLENDER_TEMPLATE.format(script_b64=payload)
@@ -566,13 +573,13 @@ def render_white_model(script: str) -> bytes:
             log = ((completed.stderr or b"") + b"\n" + (completed.stdout or b"")).decode("utf-8", "replace")
             tail = " ".join(line.strip() for line in log.splitlines() if line.strip())[-400:]
             raise LayoutRenderError(tail or "白模渲染失败。")
-        sheet = Image.new("RGB", _SHEET, (48, 48, 50))
+        sheet = Image.new("RGB", _SHEET, (255, 255, 255))
         for name, (left, top) in zip(("north", "east", "south", "west"), ((0, 0), (_CELL[0], 0), (0, _CELL[1]), (_CELL[0], _CELL[1]))):
-            cell = Image.open(os.path.join(folder, name + ".png")).convert("RGB").resize(_CELL)
+            cell = orientation_lines(Image.open(os.path.join(folder, name + ".png")).convert("RGB").resize(_CELL))
             sheet.paste(cell, (left, top))
         draw = ImageDraw.Draw(sheet)
-        draw.line((_CELL[0], 0, _CELL[0], _SHEET[1]), fill=(24, 24, 26), width=2)
-        draw.line((0, _CELL[1], _SHEET[0], _CELL[1]), fill=(24, 24, 26), width=2)
+        draw.line((_CELL[0], 0, _CELL[0], _SHEET[1]), fill=(0, 0, 0), width=2)
+        draw.line((0, _CELL[1], _SHEET[0], _CELL[1]), fill=(0, 0, 0), width=2)
         return _png_bytes(sheet)
 
 

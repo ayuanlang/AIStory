@@ -680,10 +680,10 @@ describe('white model reference for the four-grid', () => {
             ['https://cdn.example/style.png', 'https://cdn.example/clay.png'],
             entity
         );
-        assert.match(applied.prompt, /^弱参考：第一张参考图是同一处的白模/);
-        assert.match(applied.prompt, /占画面的比例照这张白模/);
-        assert.match(applied.prompt, /朝向那一面上的小锥只确认朝向/);
-        assert.match(applied.prompt, /颜色、材质、纹样和光按后面的文字画/);
+        assert.match(applied.prompt, /^朝向参考：第一张参考图只锁定每一格里哪一面朝向镜头/);
+        assert.doesNotMatch(applied.prompt, /占画面的比例照这张白模/);
+        assert.match(applied.prompt, /朝向边上的短划只标这一面/);
+        assert.match(applied.prompt, /颜色、材质、纹样、光线和光比按后面的文字/);
         assert.match(applied.prompt, /【主体外形】青砖墙/);
         assert.deepEqual(applied.refs, [
             'https://cdn.example/clay.png',
@@ -700,7 +700,7 @@ describe('white model reference for the four-grid', () => {
             [],
             entity
         );
-        assert.match(applied.prompt, /^弱参考：/);
+        assert.match(applied.prompt, /^朝向参考：/);
         assert.doesNotMatch(applied.prompt, /只锁四格/);
         assert.match(applied.prompt, /【四向拼图】左上望北/);
     });

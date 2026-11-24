@@ -383,7 +383,17 @@ _INLINE_LOCK = re.compile(
 _CELL_EDIT_LOCK = (
     "只改这一格里点名的这一处。"
     "另外三格、格线、没有点名的主体、光色和构图都保持原图不动。"
-    "不要补画东、南、西、北角标。不要重画整张四宫。"
+    "不要重画整张四宫。"
+)
+_CORNER_LABEL_CLAUSE = re.compile(
+    r"[，,；;]?\s*"
+    r"(?:不要|不|禁止|别)?"
+    r"(?:补画|再画|画上|画出|画成|写上|加上|留下|保留|生成)?"
+    r"(?:东[、,，]南[、,，]西[、,，]北)?"
+    r"(?:方向)?"
+    r"角标"
+    r"(?:\s*=\s*[^。；;\n]*)?"
+    r"[。！？]?"
 )
 _FACE_HEAD = re.compile(r"(正面|左侧面|右侧面|中部|上)：")
 _SUBJECT_CODE = re.compile(r"\[@[^\]]+\]（([^）]+)）")
@@ -982,6 +992,27 @@ def _positions_in(text: str) -> List[str]:
     return found
 
 
+def _strip_corner_labels(text: Optional[str]) -> str:
+    """Drop corner-label talk. The source quad has none, and naming them draws them."""
+    raw = str(text or "")
+    if "角标" not in raw:
+        return raw.strip()
+    kept = []
+    for piece in re.split(r"(?<=。)", raw):
+        if "角标" not in piece:
+            kept.append(piece)
+            continue
+        if not re.search(r"改(?:左上|左下|右上|右下|\d+度)格", piece):
+            continue
+        cleaned = _CORNER_LABEL_CLAUSE.sub("", piece).strip("，,；; \n")
+        if not cleaned:
+            continue
+        if cleaned[-1] not in "。！？":
+            cleaned += "。"
+        kept.append(cleaned)
+    return "".join(kept).strip("，,；; \n")
+
+
 def _ensure_period(sentence: str) -> str:
     sentence = str(sentence or "").strip()
     if not sentence:
@@ -1004,7 +1035,7 @@ def _pure_lock_sentence(sentence: str) -> bool:
 
 def order_quad_edit_clauses(text: str) -> str:
     """Name cells as 左上格、左下格、右上格、右下格 and describe them in that order."""
-    raw = str(text or "").strip()
+    raw = _strip_corner_labels(text)
     if not raw:
         return ""
     normalized = _CELL_TOKEN.sub(lambda match: _token_pos(match) + "格", raw)
@@ -1063,7 +1094,7 @@ def seal_cell_edit_instruction(text: Optional[str], *, quad_positions: bool = Fa
     A four-grid edit names cells as 左上格、左下格、右上格、右下格, in that order.
     A single cropped frame keeps the degree names the checker wrote.
     """
-    raw = str(text or "").strip()
+    raw = _strip_corner_labels(text)
     if not raw:
         return None
     if quad_positions:
@@ -1078,7 +1109,7 @@ def seal_cell_edit_instruction(text: Optional[str], *, quad_positions: bool = Fa
             raw += (
                 f"只改{named}里点名的这几处。"
                 "其余格子、格线、没有点名的主体、光色和构图都保持原图不动。"
-                "不要补画东、南、西、北角标。不要重画整张四宫。"
+                "不要重画整张四宫。"
             )
             return raw
         if "只改这一格里点名的这一处" not in raw:
@@ -1095,7 +1126,7 @@ def seal_cell_edit_instruction(text: Optional[str], *, quad_positions: bool = Fa
         raw += "。"
     if len(angles) > 1:
         named = "、".join(f"{angle}度格" for angle in angles)
-        raw += f"只改{named}里点名的这几处。其余格子、格线、没有点名的主体、光色和构图都保持原图不动。不要补画东、南、西、北角标。不要重画整张四宫。"
+        raw += f"只改{named}里点名的这几处。其余格子、格线、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
         return raw
     if "只改这一格里点名的这一处" not in raw:
         raw += _CELL_EDIT_LOCK
@@ -1231,7 +1262,7 @@ def _plan_cell_consistency_writes(
 ) -> Dict[str, Any]:
     """First-cut check: rewrite this grid cell and the single reference image together."""
     summary = str(payload.get("summary") or "").strip()
-    image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
+    image_edit_instruction = _blank_to_none(_strip_corner_labels(payload.get("image_edit_instruction")))
     revised_cell = _blank_to_none(payload.get("revised_cell"))
     revised_prompt = _blank_to_none(payload.get("revised_prompt"))
     angle = derived_view_angle(entity)
@@ -1921,8 +1952,8 @@ def build_consistency_messages(
         "左上格是0度格，左下格是180度格，右上格是90度格，右下格是270度格。"
         "四宫格句式：改{左上|左下|右上|右下}格的{主体名}。后面只写四宫技能里这一望向的那一句。"
         "多格要改时，每一格单独成句，顺序固定为左上格、左下格、右上格、右下格。没改的格子不写。"
-        "只改一格时，句尾是：只改这一格里点名的这一处。另外三格、格线、没有点名的主体、光色和构图都保持原图不动。不要补画东、南、西、北角标。不要重画整张四宫。"
-        "改了多格时，句尾按左上格、左下格、右上格、右下格列出这些格，其余格子保持原图不动。不要补画东、南、西、北角标。不要重画整张四宫。"
+        "只改一格时，句尾是：只改这一格里点名的这一处。另外三格、格线、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
+        "改了多格时，句尾按左上格、左下格、右上格、右下格列出这些格，其余格子保持原图不动。不要重画整张四宫。"
         "图片已经相符、又没有用户补充点名的画面差异时，image_edit_instruction 必须为 null。\n"
         "用户补充：用户消息里出现「用户补充」时，那是这次额外要改或要提示的点。"
         "先按开篇完成核对，再处理补充里点名的画面和句子。"

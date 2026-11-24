@@ -414,6 +414,19 @@ def test_unlimited_wall_stays_in_the_white_model_script():
     assert abs(wall.sz - 12) < 0.01 and abs(wall.sy - 2) < 0.01
 
 
+def test_orientation_sheet_keeps_the_edge_and_drops_the_fill():
+    from PIL import Image, ImageDraw
+
+    from app.services.script_analysis_flow.environment_layout_blender import orientation_lines
+
+    source = Image.new("RGB", (48, 48), (255, 255, 255))
+    ImageDraw.Draw(source).rectangle((10, 12, 36, 34), fill=(20, 40, 60))
+    sheet = orientation_lines(source)
+    assert sheet.getpixel((1, 1)) == (255, 255, 255)
+    assert sheet.getpixel((23, 23)) == (255, 255, 255)
+    assert any(sheet.getpixel((x, 12))[0] < 40 for x in range(10, 37))
+
+
 def test_blender_process_env_prefers_tree_lib(tmp_path):
     import os
 

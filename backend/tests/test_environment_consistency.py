@@ -913,6 +913,44 @@ def test_quad_edit_describes_cells_left_column_then_right():
     assert text.find("现在长边横在画面里") < text.find("改右下格的椅")
     assert "只改左上格、左下格、右上格、右下格里点名的这几处" in text
     assert "不要重画整张四宫" in text
+    assert "角标" not in text
+
+
+def test_quad_edit_drops_corner_labels_the_source_never_had():
+    entity = Dummy(id=7, prompt=MAIN_PROMPT)
+    instruction = (
+        "改右上格的深青拉丝转椅，只保留桌身画面左外侧的一把转椅，删除多余的一把转椅；"
+        "改右上格的光线，改为从远离镜头射向靠近镜头。"
+        "改右下格的光源与光线，改为光源不可见。不要补画角标。"
+        "不要补画东、南、西、北角标。"
+    )
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {
+            "consistent": True,
+            "summary": "右上格多一把转椅，右上光线和右下光源不对。",
+            "revised_prompt": None,
+            "image_edit_instruction": instruction,
+        },
+    )
+    text = plan["image_edit_instruction"]
+    assert "角标" not in text
+    assert "深青拉丝转椅" in text
+    assert "从远离镜头射向靠近镜头" in text
+    assert "光源不可见" in text
+    assert text.find("改右上格的深青拉丝转椅") < text.find("改右下格的光源与光线")
+    assert "只改右上格、右下格里点名的这几处" in text
+    assert "不要重画整张四宫" in text
+    messages = build_consistency_messages(
+        image_url="http://example.test/grid.png",
+        entity=entity,
+        main_entity=entity,
+        checked_prompt=MAIN_PROMPT,
+        kind="main",
+    )
+    assert "角标" not in messages[0]["content"]
 
 
 def test_consistency_check_passes_public_image_link():
