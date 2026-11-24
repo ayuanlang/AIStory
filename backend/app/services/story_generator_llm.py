@@ -260,7 +260,7 @@ def format_outline_registry_block(source: Any) -> str:
     """Five locked framework columns. §9 分集规划 reads these lines and does not invent another set."""
     return "\n".join([
         "[剧本框架五栏 — 分集规划输入]",
-        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。每一集用空间行写明涉及的地方，至少一处，可以多处，不并成一个名字。名字逐字用场景与道具里的空间名。场景以简单为第一优先：四壁每壁只有封闭面再加一具贴墙、嵌入或悬挂的主体，中部只有一个主体。有人坐下才把座写进主体，座不算第二主体。配套和配饰不在这一阶段写。主体只在开头【空间主体】写一次，并写综合=未超|超。各集空间行只写地方名。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。做不到或超负载，换框架里已经登记的另一处。框架没有另一处，回流剧本框架登记，不在分集里取名。不往旧处加主体。非封闭环境的远景不写入主体。各集写 AI 行，写落到本集的优势和回避，没有则优势=无｜回避=无。不写专业行。专业由分集执笔分析并执行。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起时间节点。空间名逐字用场景与道具里已有的。不另取名，不改名。这一集离了就做不成，或这一处主体超负载，而框架没有另一处，回流剧本框架补名。五栏之后的麦格芬已经锁好名字、时限和过期。有名字时，分集碰到这件就用这个名字和这一截时间，不另定，不改名，不另起一个截止。写着未锁时，不在分集里补一件。",
+        "这五栏是写 §9 分集规划的输入，原文已经在剧本框架锁好。时间行的节点、季节、昼夜、气候用时间节点。每一集用空间行写明涉及的地方，至少一处，可以多处，不并成一个名字。名字逐字用场景与道具里的空间名。场景以简单为第一优先：四壁每壁只有封闭面再加一具贴墙、嵌入或悬挂的主体，中部只有一个主体。有人坐下才把座写进主体，座不算第二主体。配套和配饰不在这一阶段写。主体只在开头【空间主体】写一次，并写综合=未超|超。各集空间行只写地方名。跟 Base Positioning，再跟 Script Mode。短剧、电影、通用连续剧不改世界。地方、到达、越过距离、读写、显形、出手用这一模式这一时代会有的：高科技用全息屏和已有通道；修仙用法宝、粒子和已设定术法；时代剧不用电脑、全息、手机，除非明文穿越或该时代已有；普通时代不套同一套办公室，也不升级成全息或法宝；末日不写成全息，除非模式明文是赛博朋克。没有这一下，不加。不写颜色、材质、纹样。环境和空间只点必要主体的名字和功能。不写方向、朝向、东南西北、左右、前后、哪一侧、面朝、座向、0度基准。这些由环境规划写。做不到或超负载，换框架里已经登记的另一处。框架没有另一处，回流剧本框架登记，不在分集里取名。不往旧处加主体。非封闭环境的远景不写入主体。各集写 AI 行，写落到本集的优势和回避，没有则优势=无｜回避=无。不写专业行。专业由分集执笔分析并执行。切场的线用故事线。EP01 摘要把剧情背景演成一件看得见的事，不把全文再贴成旁白。五栏有字时，不得另起时间节点。空间名逐字用场景与道具里已有的。不另取名，不改名。这一集离了就做不成，或这一处主体超负载，而框架没有另一处，回流剧本框架补名。五栏之后的麦格芬已经锁好名字、时限和过期。有名字时，分集碰到这件就用这个名字和这一截时间，不另定，不改名，不另起一个截止。写着未锁时，不在分集里补一件。",
         f"剧情背景: {_field_text(source, 'plot_background')}",
         f"故事线: {_field_text(source, 'story_lines')}",
         f"时间节点: {_field_text(source, 'time_nodes')}",
@@ -1273,7 +1273,7 @@ def build_registry_fill_prompts(
         "places_and_props: only spaces and objects the plot fails without. "
         "A space name is a place a person can stand in, such as 办公室、大堂、街道. "
         "One line each: `名 (EN)｜功能=｜准入=开放|受限` or `道具｜名｜功能=`. "
-        "The function is a separate sentence. No furnishings or materials. "
+        "The function is a separate sentence. No furnishings or materials. Environment and space lines name only the necessary subject and its function. Do not write direction, facing, compass points, left or right, which side, or a 0-degree axis. Those belong to environment planning. "
         "The whole text follows Base Positioning first, then Script Mode. "
         "Short drama, feature film, and general series do not change the world. "
         "Places, arrivals, distance, reading, reveals, and strikes use what that mode and era would have. "
