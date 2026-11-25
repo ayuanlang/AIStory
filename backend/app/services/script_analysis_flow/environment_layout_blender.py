@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Run a white-model script in Blender.
 
-The model writes mass() calls. A scene white model is one overhead frame of the
-interior: the camera sits above the floor and looks straight down, and the
-ceiling stays out of the picture. A shot white model is one frame looking
-north, east, south, or west.
+The model writes mass() calls. An environment white model is one 16:9 sheet of
+four views: north at the top left, east at the top right, south at the bottom
+left, west at the bottom right. A shot white model is one frame, or a clip,
+looking the named way.
 The picture is an orientation drawing: black lines on white. A short tab marks
 the facing side. Fill, shadow, and lamp color stay out of the picture.
 """
@@ -410,38 +410,16 @@ def interior_pose(look):
     return near - component * dist, cam_z, far, cam_z, sideways
 
 posts = []
-if not VIEW:
-    roofs = [item for item in MADE if item["kind"] == "ceiling" and still_here(item)]
-    finite = [item for item in MADE if item["kind"] == "floor" and still_here(item) and item["along_east"] <= 20 and item["along_north"] <= 20]
-    standing = [item for item in MADE if item["kind"] != "ceiling" and still_here(item)]
-    if finite:
-        slab = finite[0]
-        span_x = max(slab["along_east"], 0.5)
-        span_y = max(slab["along_north"], 0.5)
-        aim_x = slab["east"]
-        aim_y = slab["north"]
-        aim_z = slab["bottom"]
-    else:
-        span_x = max(high.x - low.x, 0.5)
-        span_y = max(high.y - low.y, 0.5)
-        aim_x = center_x
-        aim_y = center_y
-        aim_z = low.z
-    top = max((item["bottom"] + item["height"]) for item in standing) if standing else high.z
-    dist = max(span_x / 2.0 / max(tan_h, 0.08), span_y / 2.0 / max(tan_v, 0.08)) * 1.18
-    cam_z = max(aim_z + dist, top + 0.45)
-    posts.append(("panorama", (aim_x, aim_y, cam_z), (aim_x, aim_y, aim_z), roofs))
-else:
-    all_views = (
-        ("north", "north", -1, Vector((0.0, 1.0, 0.0))),
-        ("east", "east", -1, Vector((1.0, 0.0, 0.0))),
-        ("south", "north", 1, Vector((0.0, -1.0, 0.0))),
-        ("west", "east", 1, Vector((-1.0, 0.0, 0.0))),
-    )
-    views = tuple(item for item in all_views if item[0] == VIEW)
-    if not views:
-        raise RuntimeError("没有这一面的机位")
-    for view_name, axis, sign, cardinal in views:
+all_views = (
+    ("north", "north", -1, Vector((0.0, 1.0, 0.0))),
+    ("east", "east", -1, Vector((1.0, 0.0, 0.0))),
+    ("south", "north", 1, Vector((0.0, -1.0, 0.0))),
+    ("west", "east", 1, Vector((-1.0, 0.0, 0.0))),
+)
+views = all_views if not VIEW else tuple(item for item in all_views if item[0] == VIEW)
+if not views:
+    raise RuntimeError("没有这一面的机位")
+for view_name, axis, sign, cardinal in views:
         hidden = rear_of(axis, sign) if inside else []
         look = cardinal.normalized()
         if abs(look.y) > 0.5:
@@ -662,6 +640,9 @@ if MOTION.strip():
     scene.render.filepath = os.path.join(OUT, "frame_")
     bpy.ops.render.render(animation=True)
 else:
+    if not VIEW:
+        scene.render.resolution_x = 640
+        scene.render.resolution_y = 360
     for name, location, target, hidden in posts:
         for item in hidden:
             set_hidden(item, True)
@@ -779,12 +760,31 @@ def _encode_line_video(folder: str, fps: int) -> bytes:
         return handle.read()
 
 
+def _composite_quad(folder: str) -> bytes:
+    """North, east, south, west, in that order, on one 16:9 sheet."""
+    from PIL import ImageDraw
+
+    sheet = Image.new("RGB", (1280, 720), (255, 255, 255))
+    places = (("north", 0, 0), ("east", 640, 0), ("south", 0, 360), ("west", 640, 360))
+    for name, left, top in places:
+        path = os.path.join(folder, name + ".png")
+        if not os.path.isfile(path):
+            raise LayoutRenderError("白模四宫缺了一格。")
+        cell = orientation_lines(Image.open(path).convert("RGB"))
+        if cell.size != (640, 360):
+            cell = cell.resize((640, 360), Image.Resampling.NEAREST)
+        sheet.paste(cell, (left, top))
+    draw = ImageDraw.Draw(sheet)
+    draw.line((640, 0, 640, 719), fill=(70, 70, 72), width=2)
+    draw.line((0, 360, 1279, 360), fill=(70, 70, 72), width=2)
+    return _png_bytes(sheet)
+
+
 def render_white_model(script: str, view: str = "", motion: str = "") -> bytes:
     """Render the model's mass() script.
 
-    An empty view is one overhead frame of the interior, ceiling omitted.
-    north, east, south, or west is one 16:9 frame looking that way.
-    Motion renders that view as a white-model clip.
+    An empty view is the four-view sheet. north, east, south, or west is one
+    16:9 frame looking that way. Motion renders that view as a white-model clip.
     """
     chosen = str(view or "").strip().lower()
     clip = str(motion or "").strip()
@@ -823,12 +823,15 @@ def render_white_model(script: str, view: str = "", motion: str = "") -> bytes:
                     except ValueError:
                         fps = 8
             return _encode_line_video(folder, fps)
-        name = chosen or "panorama"
-        image_path = os.path.join(folder, name + ".png")
-        if completed.returncode != 0 or not os.path.isfile(image_path):
+        if completed.returncode != 0:
             log = ((completed.stderr or b"") + b"\n" + (completed.stdout or b"")).decode("utf-8", "replace")
             tail = " ".join(line.strip() for line in log.splitlines() if line.strip())[-400:]
             raise LayoutRenderError(tail or "白模渲染失败。")
+        if not chosen:
+            return _composite_quad(folder)
+        image_path = os.path.join(folder, chosen + ".png")
+        if not os.path.isfile(image_path):
+            raise LayoutRenderError("白模渲染失败。")
         frame = orientation_lines(Image.open(image_path).convert("RGB"))
         return _png_bytes(frame)
 

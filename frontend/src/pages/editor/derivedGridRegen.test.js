@@ -682,7 +682,7 @@ describe('white model reference for the four-grid', () => {
             ['https://cdn.example/style.png', 'https://cdn.example/clay.png'],
             entity
         );
-        assert.match(applied.prompt, /^朝向参考：第一张参考图是这一处的白模全景/);
+        assert.match(applied.prompt, /^朝向参考：第一张参考图是这一处的白模四宫/);
         assert.doesNotMatch(applied.prompt, /占画面的比例照这张白模/);
         assert.match(applied.prompt, /朝向边上的短划只标这一面/);
         assert.match(applied.prompt, /颜色、材质、纹样、光线和光比按后面的文字/);
@@ -778,9 +778,9 @@ describe('white model facing check', () => {
             scope: 'quad',
         });
         assert.match(quad, /^第一张是要改的原图/);
-        assert.match(quad, /主体朝向按这张全景里每一具的朝向修改第一张对应格/);
+        assert.match(quad, /主体朝向按白模对应格里每一具的朝向修改第一张对应格/);
         assert.match(quad, /长短边等朝向与白模不一致的，与白模保持一致/);
-        assert.match(quad, /不是四宫/);
+        assert.match(quad, /白模四宫/);
         assert.match(quad, /改左上格的台/);
         assert.equal(withWhiteModelEditInstruction(quad, { url: 'https://cdn.example/clay.png', scope: 'quad' }), quad);
         const cell = withWhiteModelEditInstruction('改门。', {
@@ -789,7 +789,7 @@ describe('white model facing check', () => {
             position: '右上',
         });
         assert.match(cell, /已经裁出的右上格/);
-        assert.match(cell, /白模全景/);
+        assert.match(cell, /白模四宫/);
         assert.match(cell, /长短边等朝向与白模不一致的，与白模保持一致/);
         assert.match(cell, /不要把另外三格画回来/);
         assert.equal(withWhiteModelEditInstruction('改门。', null), '改门。');

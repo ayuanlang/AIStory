@@ -590,7 +590,7 @@ def test_blender_process_env_prefers_tree_lib(tmp_path):
     assert env["LD_LIBRARY_PATH"].split(os.pathsep)[0] == str(lib)
 
 
-def test_blender_renders_one_panorama_from_script():
+def test_blender_renders_a_four_view_sheet_from_script():
     from app.services.script_analysis_flow.environment_layout_blender import (
         LayoutRenderError,
         blender_executable,
@@ -609,3 +609,6 @@ def test_blender_renders_one_panorama_from_script():
     assert ImageStat.Stat(image.convert("L")).stddev[0] > 12
     corner = image.getpixel((4, 4))
     assert sum(corner) > 700, corner
+    gray = image.convert("L")
+    divider = [gray.getpixel((640, y)) for y in range(0, 720, 24)]
+    assert sum(divider) / len(divider) < 160

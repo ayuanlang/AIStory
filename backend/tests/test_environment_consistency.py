@@ -976,8 +976,9 @@ def test_white_model_is_a_facing_reference_for_the_quad():
     system = messages[0]["content"]
     assert "另附白模图" in system
     assert "主体朝向" in system
-    assert "按白模全景里这一具的朝向改原图对应格" in system
-    assert "不是四宫" in system
+    assert "按白模对应格里这一具的朝向改原图对应格" in system
+    assert "白模四宫" in system
+    assert "左上望北" in system
     assert "长短边等朝向与白模不一致的，与白模保持一致" in system
     assert "不按白模改开篇" in system
     assert system.index("另附白模图") < system.index("只返回 JSON")
@@ -1027,10 +1028,10 @@ def test_white_model_for_a_cell_names_that_quadrant():
         white_model_position=found["position"],
     )
     system = messages[0]["content"]
+    assert "白模四宫" in system
     assert "原图是已经裁出的右上格" in system
-    assert "白模全景" in system
     assert "不要因为原图没有另外三格就判少件" in system
-    assert "按白模全景里这一具的朝向改" in system
+    assert "按白模这一格里这一具的朝向改" in system
     assert "长短边等朝向与白模不一致的，与白模保持一致" in system
     assert messages[1]["content"][2]["image_url"]["url"] == "https://cdn.example/clay.png"
 
