@@ -113,6 +113,7 @@ import {
     fetchSceneScores,
     fetchSceneAudiovisual,
     generateSceneScore,
+    generateSceneWhiteModel,
     fetchAssets, 
     generateSceneShots,
     regenerateSceneShots,
@@ -4810,6 +4811,7 @@ import MarkdownHelpModal from './MarkdownHelpModal';
 import AiDiagnosisModal from './AiDiagnosisModal';
 import FailedNodeInspectModal from './FailedNodeInspectModal';
 import BeatViewerModal from './BeatViewerModal';
+import { applyWhiteModelLayoutUrls } from '../beatViewer';
 import {
     buildFailedNodeDiagnosisQuery,
     buildFailedNodeDiagnosisSummary,
@@ -5818,6 +5820,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [sceneScores, setSceneScores] = useState([]);
     const [sceneScoreBusyId, setSceneScoreBusyId] = useState('');
+    const [sceneWhiteModelBusyId, setSceneWhiteModelBusyId] = useState('');
+    const [sceneWhiteModelErrorById, setSceneWhiteModelErrorById] = useState({});
     const [sceneScoreErrorById, setSceneScoreErrorById] = useState({});
     const [sceneScoreViewer, setSceneScoreViewer] = useState(null);
     const [sceneScoreCopied, setSceneScoreCopied] = useState(false);
@@ -5876,6 +5880,60 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setSceneScoreBusyId('');
         }
     }, [activeEpisode?.id]);
+    const openSceneWhiteModelSheet = useCallback((label, sheets) => {
+        const ready = (Array.isArray(sheets) ? sheets : []).filter((item) => String(item?.image_url || '').trim());
+        if (!ready.length) return;
+        const popup = window.open('', 'sceneWhiteModel', 'popup=yes,width=1320,height=820');
+        if (!popup) return;
+        const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (ch) => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+        ));
+        const figures = ready.map((item) => {
+            const url = String(item.image_url || '').trim();
+            const full = /^https?:/i.test(url)
+                ? url
+                : `${window.location.origin}${url.startsWith('/') ? url : `/${url}`}`;
+            const name = String(item.name || label || '').trim();
+            return `<figure style="margin:0"><figcaption style="color:#ddd;font:14px sans-serif;padding:8px 0">${escapeHtml(name)}</figcaption><img src="${escapeHtml(full)}" alt="${escapeHtml(name)}" style="max-width:100%;height:auto"></figure>`;
+        }).join('');
+        const title = escapeHtml(label ? `${label} · 白模` : '白模');
+        popup.document.open();
+        popup.document.write(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>`
+            + '<style>body{margin:0;background:#111;color:#ddd}main{display:flex;flex-direction:column;gap:24px;padding:16px}</style></head>'
+            + `<body><main>${figures}</main></body></html>`
+        );
+        popup.document.close();
+        popup.focus();
+    }, []);
+    const handleGenerateSceneWhiteModel = useCallback(async (sceneId, sceneLabel) => {
+        const episodeId = Number(activeEpisode?.id || 0);
+        const marker = String(sceneId || '').trim();
+        if (!episodeId || !marker || sceneWhiteModelBusyId) return;
+        setSceneWhiteModelBusyId(marker);
+        setSceneWhiteModelErrorById((prev) => ({ ...prev, [marker]: '' }));
+        try {
+            const result = await generateSceneWhiteModel(episodeId, marker);
+            const sheets = Array.isArray(result?.sheets) ? result.sheets : [];
+            const failed = sheets.map((item) => String(item?.error || '').trim()).filter(Boolean);
+            const ready = sheets.filter((item) => String(item?.image_url || '').trim());
+            if (!ready.length) {
+                throw new Error(failed[0] || t('白模没有返回图片', 'White model returned no image'));
+            }
+            setEpisodeOwnedEntities((prev) => applyWhiteModelLayoutUrls(prev, ready));
+            await refreshEpisodeOwnedEntitiesRef.current?.();
+            openSceneWhiteModelSheet(sceneLabel, ready);
+            if (failed.length) {
+                setSceneWhiteModelErrorById((prev) => ({ ...prev, [marker]: failed.join('；') }));
+            }
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || String(error);
+            const text = typeof detail === 'string' ? detail : JSON.stringify(detail);
+            setSceneWhiteModelErrorById((prev) => ({ ...prev, [marker]: text }));
+        } finally {
+            setSceneWhiteModelBusyId('');
+        }
+    }, [activeEpisode?.id, openSceneWhiteModelSheet, sceneWhiteModelBusyId, t]);
     const { logs: systemPanelLogs } = useLog();
     const parentOnLogRef = useRef(parentOnLog);
     parentOnLogRef.current = parentOnLog;
@@ -15593,6 +15651,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
     }, [activeEpisode?.id, projectId]);
+    const refreshEpisodeOwnedEntitiesRef = useRef(null);
+    refreshEpisodeOwnedEntitiesRef.current = refreshEpisodeOwnedEntities;
 
     useEffect(() => {
         // Drop selected reuse IDs that are not injectable (missing, or angle-derivative ENV).
@@ -37575,7 +37635,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 fetchEpisode={fetchEpisode}
                 pipelineNodes={diagnosticsPipelineNodes}
                 workspaceScenes={diagnosticsEpisodeScenes}
+                entities={episodeOwnedEntities}
                 fetchShots={fetchShots}
+                onRefreshEntities={refreshEpisodeOwnedEntities}
             />
             <AiDiagnosisModal
                 open={aiDiagnosisOpen}
@@ -39625,7 +39687,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             )
                                             : t('重跑', 'Rerun')}
                                     </button>
+                                    {stepKey === 'framing_opt' ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => handleGenerateSceneWhiteModel(sceneId, sceneLabel)}
+                                            disabled={!state.ready || Boolean(sceneWhiteModelBusyId)}
+                                            className={diagnosticBtnClass}
+                                            title={state.ready
+                                                ? t('用这一场现场编排成稿生成白模，含开场的角色和道具', 'Generate a white model from this scene’s floor staging, including the opening characters and props')
+                                                : t('现场编排完成后才能生成白模', 'The white model can be generated after floor staging is ready')}
+                                        >
+                                            {sceneWhiteModelBusyId === sceneId
+                                                ? (
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                                        {t('生成中', 'Generating')}
+                                                    </span>
+                                                )
+                                                : t('生成白模', 'White model')}
+                                        </button>
+                                    ) : null}
                                 </div>
+                                {stepKey === 'framing_opt' && sceneWhiteModelErrorById?.[sceneId] ? (
+                                    <span className="text-[10px] text-red-300 leading-tight text-center" title={sceneWhiteModelErrorById[sceneId]}>
+                                        {sceneWhiteModelErrorById[sceneId]}
+                                    </span>
+                                ) : null}
                             </div>
                             );
                         };

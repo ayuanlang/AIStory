@@ -5070,6 +5070,20 @@ async def _run_derived_framing_then_staging(
             step_name=step_name,
             called=called,
         )
+        if step_name == "derived_framing":
+            from app.services.script_analysis_flow.environment_layout_job import (
+                schedule_scene_white_model,
+            )
+
+            schedule_scene_white_model(
+                project_id=int(project_id or 0),
+                episode_id=int(episode_id or 0),
+                scene_id=str(scene_id or ""),
+                user_id=int(getattr(user_principal, "id", 0) or 0),
+                username=str(getattr(user_principal, "username", "") or ""),
+                framing_text=current_block,
+                main_names=collect_staging_main_environment_names(env_scene),
+            )
     return current_block
 
 

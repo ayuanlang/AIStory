@@ -76,6 +76,7 @@ import {
     regenerateSceneShots,
     checkShotDerivedSubjects,
     regenerateShotDerivedSubject,
+    generateShotWhiteModel,
     createAsset,
     uploadAsset,
     getSettings,
@@ -948,6 +949,34 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [notification, setNotification] = useState(null);
     const [restoringFromStaging, setRestoringFromStaging] = useState(false);
     const [checkingShotSubjects, setCheckingShotSubjects] = useState(false);
+    const [shotWhiteModelBusy, setShotWhiteModelBusy] = useState(false);
+    const [shotWhiteModelOpen, setShotWhiteModelOpen] = useState(false);
+    useEffect(() => {
+        setShotWhiteModelOpen(false);
+    }, [editingShot?.id]);
+    const shotWhiteModel = useMemo(() => {
+        try {
+            const tech = JSON.parse(editingShot?.technical_notes || '{}');
+            const sheets = (Array.isArray(tech?.white_model_sheets) ? tech.white_model_sheets : [])
+                .map((item) => {
+                    const url = String(item?.video_url || item?.image_url || '').trim();
+                    return {
+                        name: String(item?.name || '').trim(),
+                        url,
+                        video: Boolean(item?.video_url) || /\.mp4(\?|$)/i.test(url),
+                    };
+                })
+                .filter((item) => item.url);
+            const url = sheets[0]?.url || String(tech?.white_model_url || '').trim();
+            return {
+                url,
+                beat: String(tech?.white_model_beat || '').trim(),
+                sheets: sheets.length ? sheets : (url ? [{ name: '', url }] : []),
+            };
+        } catch {
+            return { url: '', beat: '', sheets: [] };
+        }
+    }, [editingShot?.id, editingShot?.technical_notes]);
     const [regeneratingShotSubjects, setRegeneratingShotSubjects] = useState(false);
     const [shotSubjectCheck, setShotSubjectCheck] = useState(null);
     const showNotification = (message, type = 'success') => {
@@ -4774,6 +4803,39 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setRegeneratingShotSubjects(false);
         }
     }, [applyRegeneratedShot, editingShot, regeneratingShotSubjects, showNotification, t]);
+
+    const handleGenerateShotWhiteModel = useCallback(async () => {
+        if (!editingShot?.id || shotWhiteModelBusy) return;
+        setShotWhiteModelBusy(true);
+        try {
+            const result = await generateShotWhiteModel(editingShot.id);
+            const notes = String(result?.technical_notes || '');
+            if (notes) {
+                const patch = { technical_notes: notes };
+                setEditingShot((prev) => (
+                    prev && String(prev.id) === String(editingShot.id) ? { ...prev, ...patch } : prev
+                ));
+                setShots((prev) => prev.map((shot) => (
+                    String(shot?.id) === String(editingShot.id) ? { ...shot, ...patch } : shot
+                )));
+            }
+            const beat = String(result?.beat || '').trim();
+            const count = Array.isArray(result?.sheets) ? result.sheets.length : 0;
+            const failed = (Array.isArray(result?.errors) ? result.errors : []).filter(Boolean);
+            showNotification(
+                t(
+                    `白模动画已生成${count > 1 ? ` ${count} 段` : ''}${beat ? `，按拍 ${beat}` : ''}`,
+                    `White-model clip ready${count > 1 ? `, ${count} clips` : ''}${beat ? `, beat ${beat}` : ''}`
+                ),
+                failed.length ? 'warning' : 'success'
+            );
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || t('未知错误', 'Unknown error');
+            showNotification(t(`白模失败: ${detail}`, `White model failed: ${detail}`), 'error');
+        } finally {
+            setShotWhiteModelBusy(false);
+        }
+    }, [editingShot?.id, setEditingShot, shotWhiteModelBusy, showNotification, t]);
 
     const handleCheckShotSubjects = useCallback(async () => {
         if (!editingShot?.id || !editingShot?.scene_id || checkingShotSubjects) return;
@@ -13756,6 +13818,135 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
                                 />
                             </div>
+
+                            <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <div className="text-[10px] uppercase font-bold text-muted-foreground">{t('白模', 'White model')}</div>
+                                        <div className="text-[10px] text-white/40">
+                                            {shotWhiteModel.sheets.length
+                                                ? t(
+                                                    `已按分镜提示词生成 ${shotWhiteModel.sheets.length} 段白模动画${shotWhiteModel.beat ? `，拍 ${shotWhiteModel.beat}` : ''}`,
+                                                    `${shotWhiteModel.sheets.length} white-model clip${shotWhiteModel.sheets.length > 1 ? 's' : ''} from this shot’s prompt${shotWhiteModel.beat ? `, beat ${shotWhiteModel.beat}` : ''}`
+                                                )
+                                                : t('按这一镜的分镜提示词，在选定的衍生环境里生成白模动画', 'Animate the white model in this shot’s derived environment from its prompt')}
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                    {shotWhiteModel.sheets.length ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShotWhiteModelOpen(true)}
+                                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-white/15 bg-white/5 text-white/80 hover:bg-white/10 text-xs font-medium shrink-0"
+                                            title={t('查看这一镜的白模动画', 'View this shot’s white-model clip')}
+                                        >
+                                            {t('查看', 'View')}
+                                        </button>
+                                    ) : null}
+                                    <button
+                                        type="button"
+                                        onClick={handleGenerateShotWhiteModel}
+                                        disabled={shotWhiteModelBusy || !editingShot?.id}
+                                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-sky-500/40 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                                        title={t('按这一镜的分镜提示词生成白模动画', 'Animate the white model from this shot’s prompt')}
+                                    >
+                                        {shotWhiteModelBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5" />}
+                                        {shotWhiteModelBusy
+                                            ? t('生成中', 'Generating')
+                                            : (shotWhiteModel.sheets.length ? t('重新生成', 'Regenerate') : t('生成白模', 'White model'))}
+                                    </button>
+                                    </div>
+                                </div>
+                                {shotWhiteModel.sheets.length ? (
+                                    <div className={`grid gap-2 ${shotWhiteModel.sheets.length > 1 ? 'sm:grid-cols-2' : ''}`}>
+                                        {shotWhiteModel.sheets.map((sheet) => {
+                                            const full = getFullUrl(sheet.url);
+                                            const caption = sheet.name ? (
+                                                <div className="mb-1 truncate text-[10px] font-semibold text-white/55">{sheet.name}</div>
+                                            ) : null;
+                                            if (sheet.video) {
+                                                return (
+                                                    <div key={`${sheet.name}-${sheet.url}`}>
+                                                        {caption}
+                                                        <video
+                                                            src={full}
+                                                            controls
+                                                            playsInline
+                                                            className="w-full max-h-56 rounded border border-white/10 bg-black"
+                                                        />
+                                                    </div>
+                                                );
+                                            }
+                                            return (
+                                                <a key={`${sheet.name}-${sheet.url}`} href={full} target="_blank" rel="noreferrer" className="block">
+                                                    {caption}
+                                                    <img
+                                                        src={full}
+                                                        alt={sheet.name || t('白模', 'White model')}
+                                                        className="w-full max-h-56 object-contain rounded border border-white/10 bg-white"
+                                                    />
+                                                </a>
+                                            );
+                                        })}
+                                    </div>
+                                ) : null}
+                            </div>
+                            {shotWhiteModelOpen && shotWhiteModel.sheets.length ? (
+                                <div
+                                    className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4"
+                                    onClick={() => setShotWhiteModelOpen(false)}
+                                >
+                                    <div
+                                        className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#161616] shadow-2xl"
+                                        onClick={(event) => event.stopPropagation()}
+                                    >
+                                        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                                            <div className="min-w-0">
+                                                <div className="truncate text-sm font-bold text-white">
+                                                    {t('这一镜的白模', 'This shot’s white model')}
+                                                    {shotWhiteModel.beat ? ` · ${t('拍', 'Beat')} ${shotWhiteModel.beat}` : ''}
+                                                </div>
+                                                <div className="text-[11px] text-white/40">
+                                                    {t('按这一镜的分镜提示词生成的白模动画', 'White-model clip made from this shot’s prompt')}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShotWhiteModelOpen(false)}
+                                                className="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/20"
+                                                aria-label={t('关闭白模', 'Close white model')}
+                                            >
+                                                <X className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                                            {shotWhiteModel.sheets.map((sheet) => {
+                                                const full = getFullUrl(sheet.url);
+                                                const caption = sheet.name || t('白模动画', 'White-model clip');
+                                                return (
+                                                    <figure key={`${sheet.name}-${sheet.url}`} className="m-0">
+                                                        <figcaption className="mb-2 text-xs font-semibold text-white/70">{caption}</figcaption>
+                                                        {sheet.video ? (
+                                                            <video
+                                                                src={full}
+                                                                controls
+                                                                playsInline
+                                                                className="max-h-[70vh] w-full rounded-lg border border-white/10 bg-black"
+                                                            />
+                                                        ) : (
+                                                            <img
+                                                                src={full}
+                                                                alt={caption}
+                                                                className="max-h-[70vh] w-full rounded-lg border border-white/10 bg-white object-contain"
+                                                            />
+                                                        )}
+                                                    </figure>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : null}
 
                             {/* 1. Workflow / Media Assets */}
                             <div className="space-y-6">

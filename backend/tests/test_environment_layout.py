@@ -427,6 +427,156 @@ def test_orientation_sheet_keeps_the_edge_and_drops_the_fill():
     assert any(sheet.getpixel((x, 12))[0] < 40 for x in range(10, 37))
 
 
+def test_white_model_keeps_opening_characters_and_props():
+    from app.services.script_analysis_flow.environment_layout import (
+        merge_occupant_script,
+        occupant_mass_script,
+    )
+    from app.services.script_analysis_flow.environment_layout_job import white_model_groups
+
+    text = """
+【白模测算】
+环境=客栈大堂｜原点=八仙桌｜东0北0
+具=八仙桌｜东=0｜北=0｜底=0｜沿东=1.8｜沿北=0.9｜高=0.75
+人=CHAR:[@甲]｜拍=开场｜东=0｜北=0.8｜底=0｜沿东=0.45｜沿北=0.25｜高=1.7｜罗盘朝向=南
+件=PROP:[酒壶]｜拍=开场｜东=0.2｜北=0｜底=0.75｜沿东=0.2｜沿北=0.2｜高=0.2
+人=CHAR:[@乙]｜拍=2｜东=1｜北=1｜底=0｜沿东=0.45｜沿北=0.25｜高=1.7
+【/白模测算】
+"""
+    groups = white_model_groups(text)
+    assert len(groups) == 1
+    assert groups[0]["name"] == "客栈大堂"
+    occupants = occupant_mass_script([*groups[0]["people"], *groups[0]["props"]])
+    assert 'mass("CHAR:[@甲]", "person"' in occupants
+    assert 'face="南"' in occupants
+    assert 'mass("PROP:[酒壶]", "prop"' in occupants
+    assert "CHAR:[@乙]" not in occupants
+    user = layout_messages("【六面一次】\n距原点=北0米东0米", occupants=occupants)[1]["content"]
+    assert "角色和道具必须各写一行" in user
+    assert "CHAR:[@甲]" in user
+    script = merge_occupant_script(
+        'FOCAL_MM = 35\nmass("CHAR:[@甲]", "person", east=9, north=9, along_east=1, along_north=1, height=1, bottom=0)\nmass("八仙桌", "furniture", east=0, north=0, along_east=1.8, along_north=0.9, height=0.75, bottom=0)',
+        occupants,
+    )
+    boxes, _meta = boxes_from_layout_script(script)
+    person = next(box for box in boxes if box.kind == "person")
+    prop = next(box for box in boxes if box.kind == "prop")
+    assert person.name == "CHAR:[@甲]"
+    assert abs(person.cy - 0.8) < 0.01
+    assert person.face == "南"
+    assert prop.name == "PROP:[酒壶]"
+    assert abs(prop.cz - (0.75 + 0.2 / 2)) < 0.01
+
+
+def test_scene_white_model_finds_framing_under_scene_number():
+    from app.services.script_analysis_flow.environment_layout_job import framing_text_for_scene
+
+    text = "【白模测算】\n环境=秘库｜原点=地面\n【/白模测算】"
+    found = framing_text_for_scene({"SC02": {"framing": text}}, "EP01_SC02")
+    assert "环境=秘库" in found
+    from_block = framing_text_for_scene(
+        {},
+        "EP01_SC02",
+        {"2": {"scene_block": text}},
+    )
+    assert "环境=秘库" in from_block
+    assert framing_text_for_scene({"EP01_SC02A": {"framing": text}}, "EP01_SC02") == ""
+
+
+def test_shot_motion_follows_the_locked_view():
+    from app.services.script_analysis_flow.environment_layout import (
+        animation_script_from_model_text,
+        mass_motion_brief,
+        shot_anim_seconds,
+        shot_story_prompt,
+    )
+
+    story = shot_story_prompt(
+        json.dumps({"video_prompt_cn": "(P1 0s–5s) 镜头离 CHAR:[@顾沉舟] 正前一条手臂。"}, ensure_ascii=False),
+        "",
+        "Beat-Shot映射:合镜Beat=Beat2+Beat3+Beat4｜Duration=15",
+    )
+    assert story.startswith("(P1 0s–5s)")
+    assert shot_anim_seconds("6", "推近。") == 6
+    assert shot_anim_seconds("", "末P止秒=12s") == 12
+    assert shot_anim_seconds("15", "快门速度=1/96s｜P3(10s–15s)") == 15
+    script = """
+SECONDS = 4
+FPS = 8
+CAM t=0 view=east dolly=2 rise=0 pan=0
+CAM t=0 view=north dolly=0 rise=0 pan=0
+CAM t=4 view=north dolly=1 rise=0.2 pan=-10
+MOVE "CHAR:[@甲]" t=0 east=0 north=-1
+MOVE "墙" t=2 east=9 north=9
+MOVE "CHAR:[@甲]" t=4 east=0.5 north=-0.2
+"""
+    motion = animation_script_from_model_text(
+        script,
+        view="north",
+        names=["CHAR:[@甲]"],
+        seconds=4,
+    )
+    assert "view=north" in motion
+    assert "view=east" not in motion
+    assert "dip=0" in motion
+    assert 'MOVE "CHAR:[@甲]"' in motion
+    assert "墙" not in motion
+    brief = mass_motion_brief(
+        'mass("重型保险台", "furniture", east=0, north=0, along_east=1.80, along_north=0.80, height=0.75, bottom=0)\n'
+        'mass("CHAR:[@顾沉舟]", "person", east=0, north=-1.20, along_east=0.45, along_north=0.30, height=1.75, bottom=0)\n'
+        'mass("北墙", "wall", east=0, north=3, along_east=6, along_north=0.20, height=2.90, bottom=0)\n'
+    )
+    assert "重型保险台｜东=0.00｜北=0.00" in brief
+    assert "CHAR:[@顾沉舟]" in brief
+    assert "北墙" not in brief
+    dipped = animation_script_from_model_text(
+        "CAM t=0 view=north dolly=0.70 rise=0 pan=0 dip=12\n"
+        "CAM t=5 view=north dolly=1.00 rise=0 pan=0 dip=0\n",
+        view="north",
+        names=[],
+        seconds=5,
+    )
+    assert "dip=12" in dipped
+    assert "t=5.00 view=north" in dipped and "dip=0" in dipped
+
+
+def test_shot_white_model_uses_named_derived_views():
+    from app.services.script_analysis_flow.environment_layout_job import shot_derived_targets
+
+    hint = "背景参考图 ENV:[0度客栈大堂] 之后切到 ENV:[180度客栈大堂_破损]，主环境 ENV:[客栈大堂] 不单独出图。"
+    targets = shot_derived_targets(hint)
+    assert [(item["name"], item["view"], item["main"]) for item in targets] == [
+        ("0度客栈大堂", "north", "客栈大堂"),
+        ("180度客栈大堂_破损", "south", "客栈大堂"),
+    ]
+
+
+def test_shot_white_model_uses_that_beat_pose():
+    from app.services.script_analysis_flow.environment_layout import occupant_mass_script
+    from app.services.script_analysis_flow.environment_layout_job import shot_pose_boxes
+
+    text = """
+【白模测算】
+环境=客栈大堂｜原点=八仙桌｜东0北0
+具=八仙桌｜东=0｜北=0｜底=0｜沿东=1.8｜沿北=0.9｜高=0.75
+人=CHAR:[@甲]｜拍=开场｜东=0｜北=0｜底=0｜沿东=0.45｜沿北=0.25｜高=1.7
+【/白模测算】
+[BEAT_START:1]
+人=CHAR:[@甲]｜拍=1｜东=1.2｜北=0｜底=0｜沿东=0.45｜沿北=0.25｜高=1.7
+件=PROP:[酒壶]｜拍=1｜东=0.2｜北=0｜底=0.75｜沿东=0.2｜沿北=0.2｜高=0.2
+镜=B1｜东=0｜北=-2｜高=1.6｜望=北｜景别=MS｜视场=47
+[BEAT_END:1]
+"""
+    pose = shot_pose_boxes(text, [1])
+    assert pose["beat"] == "1"
+    script = occupant_mass_script([*pose["people"], *pose["props"]])
+    assert 'mass("CHAR:[@甲]", "person", east=1.2' in script
+    assert 'mass("PROP:[酒壶]", "prop"' in script
+    opening = shot_pose_boxes(text, [])
+    assert opening["beat"] == "开场"
+    assert occupant_mass_script(opening["people"]).count("east=0") >= 1
+
+
 def test_blender_process_env_prefers_tree_lib(tmp_path):
     import os
 
@@ -440,7 +590,7 @@ def test_blender_process_env_prefers_tree_lib(tmp_path):
     assert env["LD_LIBRARY_PATH"].split(os.pathsep)[0] == str(lib)
 
 
-def test_blender_renders_four_grid_from_script():
+def test_blender_renders_one_panorama_from_script():
     from app.services.script_analysis_flow.environment_layout_blender import (
         LayoutRenderError,
         blender_executable,
@@ -457,5 +607,5 @@ def test_blender_renders_four_grid_from_script():
     image = Image.open(io.BytesIO(binary)).convert("RGB")
     assert image.size == (1280, 720)
     assert ImageStat.Stat(image.convert("L")).stddev[0] > 12
-    center = image.getpixel((320, 180))
-    assert sum(center) > 280, center
+    corner = image.getpixel((4, 4))
+    assert sum(corner) > 700, corner

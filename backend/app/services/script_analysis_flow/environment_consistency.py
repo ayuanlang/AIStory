@@ -1694,12 +1694,118 @@ def remote_vision_image_link(url: str) -> str:
     return raw
 
 
+_WHITE_MODEL_CELL = {0: "左上", 90: "右上", 180: "左下", 270: "右下"}
+
+
+def layout_image_url(entity: Any) -> str:
+    if entity is None:
+        return ""
+    return str(attrs_of(entity).get("layout_image_url") or "").strip()
+
+
+def white_model_facing_clause(scope: str, position: str = "") -> str:
+    """Facing rules used only when a white-model image is attached."""
+    if str(scope or "").strip() == "sheet":
+        cell = f"{position}格" if str(position or "").strip() in _WHITE_MODEL_CELL.values() else "这一格"
+        return (
+            "另附白模图。用户消息第一张是待查原图，第二张是这一处的白模全景。白模是一张单图，不是四宫。\n"
+            f"原图是已经裁出的{cell}。只拿全景里对得上的主体朝向和这一张原图对。"
+            "不要因为原图没有另外三格就判少件。\n"
+            "白模只锁主体朝向，含长短边。台、床、柜、门是长边朝哪、短边朝哪、"
+            "哪一面朝外、侧面还是背面，门在哪一面墙上、开着还是关着，都照这张全景。\n"
+            "原图的长短边等朝向和全景里这一具不一致，就是朝向不一致。\n"
+            "颜色、材质、纹样、光线、光比不跟白模对。白模的白底、黑线和没有明暗的表面不是成图内容。\n"
+            "朝向不符时，image_edit_instruction 只改这一张原图，并写明按白模全景里这一具的朝向改。"
+            "长短边等朝向与白模不一致的，与白模保持一致。\n"
+            "开篇和宫格的文字仍按原有规则，不按白模改开篇。\n"
+        )
+    return (
+        "另附白模图。用户消息第一张是待查原图，第二张是同一处的白模全景。白模是一张单图，不是四宫。\n"
+        "白模只锁主体朝向，含长短边。全景里每一具哪一面朝哪，原图每一格里的这一具都要跟它对上。\n"
+        "原图仍是四宫：左上望北，右上望东，左下望南，右下望西。不要把白模当成四格，也不要按格子去切白模。\n"
+        "台、床、柜、门在全景里是长边朝哪、短边朝哪、哪一面朝外、侧面还是背面，"
+        "门在哪一面墙上、开着还是关着，都照这张全景。\n"
+        "原图某一格的长短边等朝向和全景里这一具不一致，就是朝向不一致。\n"
+        "颜色、材质、纹样、光线、光比不跟白模对。白模的白底、黑线和没有明暗的表面不是成图内容。\n"
+        "朝向不符时，image_edit_instruction 写明按白模全景里这一具的朝向改原图对应格。"
+        "长短边等朝向与白模不一致的，与白模保持一致。\n"
+        "开篇和宫格的文字仍按原有规则，不按白模改开篇。\n"
+    )
+
+
+def resolve_consistency_white_model(
+    entity: Any,
+    main_entity: Optional[Any],
+    depended_entity: Optional[Any] = None,
+    *,
+    kind: str,
+    checked_image_url: str = "",
+    requested_url: str = "",
+    requested_scope: str = "",
+    requested_position: str = "",
+) -> Dict[str, str]:
+    """Pick the white-model sheet, if one is already stored on this environment."""
+    url = (
+        str(requested_url or "").strip()
+        or layout_image_url(entity)
+        or layout_image_url(main_entity)
+        or layout_image_url(depended_entity)
+    )
+    checked = str(checked_image_url or "").strip()
+    if url and checked and url == checked:
+        url = ""
+    scope = str(requested_scope or "").strip()
+    if scope not in {"quad", "sheet"}:
+        scope = "quad" if kind in {"main", "derived_main"} else "sheet"
+    position = str(requested_position or "").strip()
+    if position not in _WHITE_MODEL_CELL.values():
+        position = _WHITE_MODEL_CELL.get(derived_view_angle(entity) or -1, "")
+    if not url:
+        return {"url": "", "scope": "", "position": ""}
+    return {"url": url, "scope": scope, "position": position if scope == "sheet" else ""}
+
+
+def _finish_consistency_messages(
+    system_prompt: str,
+    parts: List[str],
+    image_url: str,
+    *,
+    white_model_url: str = "",
+    white_model_scope: str = "",
+    white_model_position: str = "",
+) -> List[Dict[str, Any]]:
+    checked = str(image_url or "").strip()
+    white = str(white_model_url or "").strip()
+    if white and white == checked:
+        white = ""
+    text_parts = list(parts)
+    prompt = system_prompt
+    if white:
+        clause = white_model_facing_clause(white_model_scope, white_model_position)
+        marker = "只返回 JSON"
+        prompt = prompt.replace(marker, clause + marker, 1) if marker in prompt else prompt + clause
+        text_parts.append("第二张图是白模，只用来核对主体朝向。")
+    content: List[Dict[str, Any]] = [
+        {"type": "text", "text": "\n".join(text_parts)},
+        {"type": "image_url", "image_url": {"url": checked}},
+    ]
+    if white:
+        content.append({"type": "image_url", "image_url": {"url": white}})
+    return [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": content},
+    ]
+
+
 def _build_derived_main_consistency_messages(
     *,
     image_url: str,
     entity: Any,
     main_entity: Optional[Any],
     note: str = "",
+    white_model_url: str = "",
+    white_model_scope: str = "",
+    white_model_position: str = "",
 ) -> List[Dict[str, Any]]:
     attrs = attrs_of(entity)
     delta = str(attrs.get("state_delta") or "").strip()
@@ -1740,16 +1846,14 @@ def _build_derived_main_consistency_messages(
     if extra:
         parts.append("用户补充，这次要特别处理：")
         parts.append(extra)
-    return [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "\n".join(parts)},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        },
-    ]
+    return _finish_consistency_messages(
+        system_prompt,
+        parts,
+        image_url,
+        white_model_url=white_model_url,
+        white_model_scope=white_model_scope or "quad",
+        white_model_position=white_model_position,
+    )
 
 
 def _cell_wall_and_grid(source: Optional[Any], angle: Optional[int]) -> tuple:
@@ -1768,6 +1872,9 @@ def _build_cell_consistency_messages(
     main_entity: Optional[Any],
     note: str = "",
     depended_entity: Optional[Any] = None,
+    white_model_url: str = "",
+    white_model_scope: str = "",
+    white_model_position: str = "",
 ) -> List[Dict[str, Any]]:
     angle = derived_view_angle(entity)
     from_derived_main = is_derived_main_environment_entity(main_entity)
@@ -1846,16 +1953,14 @@ def _build_cell_consistency_messages(
     if extra:
         parts.append("用户补充，这次要特别处理：")
         parts.append(extra)
-    return [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "\n".join(parts)},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        },
-    ]
+    return _finish_consistency_messages(
+        system_prompt,
+        parts,
+        image_url,
+        white_model_url=white_model_url,
+        white_model_scope=white_model_scope or "sheet",
+        white_model_position=white_model_position,
+    )
 
 
 def build_consistency_messages(
@@ -1867,6 +1972,9 @@ def build_consistency_messages(
     kind: str,
     note: str = "",
     depended_entity: Optional[Any] = None,
+    white_model_url: str = "",
+    white_model_scope: str = "",
+    white_model_position: str = "",
 ) -> List[Dict[str, Any]]:
     if kind == "derived_main":
         return _build_derived_main_consistency_messages(
@@ -1874,6 +1982,9 @@ def build_consistency_messages(
             entity=entity,
             main_entity=main_entity,
             note=note,
+            white_model_url=white_model_url,
+            white_model_scope=white_model_scope,
+            white_model_position=white_model_position,
         )
     if kind == "cell":
         return _build_cell_consistency_messages(
@@ -1882,6 +1993,9 @@ def build_consistency_messages(
             main_entity=main_entity,
             note=note,
             depended_entity=depended_entity,
+            white_model_url=white_model_url,
+            white_model_scope=white_model_scope,
+            white_model_position=white_model_position,
         )
     system_prompt = (
         "你是环境资产一致性校对。主环境开篇在【四向拼图】之前，是权威。\n"
@@ -2022,14 +2136,12 @@ def build_consistency_messages(
             "补充点名的宫格句子，在不违背开篇的前提下写进改后的提示词。"
             "补充没有写到的，不要另造。"
         )
-    return [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "\n".join(parts)},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        },
-    ]
+    return _finish_consistency_messages(
+        system_prompt,
+        parts,
+        image_url,
+        white_model_url=white_model_url,
+        white_model_scope=white_model_scope or ("quad" if kind in {"main", "derived_main"} else "sheet"),
+        white_model_position=white_model_position,
+    )
 

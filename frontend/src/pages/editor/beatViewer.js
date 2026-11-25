@@ -370,6 +370,111 @@ const sceneOrderToken = (value) => {
     return null;
 };
 
+const compactEnvironmentName = (value) => String(value || '')
+    .trim()
+    .replace(/^(?:ENV)\s*[:：]\s*/i, '')
+    .replace(/^\[+|\]+$/g, '')
+    .split(/[｜|]/)[0]
+    .trim()
+    .toLowerCase();
+
+const isAngledEnvironmentName = (value) => /^(?:\d+|[０-９]+)\s*(?:度|°|º)/.test(String(value || '').trim());
+
+const readLayoutImageUrl = (entity) => {
+    const raw = entity?.custom_attributes;
+    let attrs = {};
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) attrs = raw;
+    else if (typeof raw === 'string' && raw.trim()) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) attrs = parsed;
+        } catch {
+            attrs = {};
+        }
+    }
+    return String(attrs.layout_image_url || '').trim();
+};
+
+export const framingEnvironmentNames = (text) => {
+    const names = [];
+    const blockRe = /【白模测算】([\s\S]*?)【\/白模测算】/g;
+    let block = blockRe.exec(String(text || ''));
+    while (block) {
+        String(block[1] || '').split(/\r?\n/).forEach((line) => {
+            const raw = String(line || '').trim();
+            if (!raw || /(?:^|[｜|])(?:具|人|件)=/.test(raw)) return;
+            const match = /(?:^|[｜|])环境=([^｜|\r\n]+)/.exec(raw);
+            const name = String(match?.[1] || '').trim();
+            if (name && !names.some((item) => compactEnvironmentName(item) === compactEnvironmentName(name))) {
+                names.push(name);
+            }
+        });
+        block = blockRe.exec(String(text || ''));
+    }
+    return names;
+};
+
+const workspaceEnvironmentNames = (scene) => String(scene?.environment_name || '')
+    .split(/[，,、]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const entityAttributes = (entity) => {
+    const raw = entity?.custom_attributes;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return { ...raw };
+    if (typeof raw === 'string' && raw.trim()) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { ...parsed };
+        } catch {
+            return {};
+        }
+    }
+    return {};
+};
+
+export const applyWhiteModelLayoutUrls = (entities, sheets) => {
+    const urls = new Map();
+    (Array.isArray(sheets) ? sheets : []).forEach((sheet) => {
+        const id = Number(sheet?.entity_id || 0);
+        const url = String(sheet?.image_url || '').trim();
+        if (id > 0 && url) urls.set(id, url);
+    });
+    if (!urls.size) return Array.isArray(entities) ? entities : [];
+    return (Array.isArray(entities) ? entities : []).map((entity) => {
+        const url = urls.get(Number(entity?.id || 0));
+        if (!url) return entity;
+        return {
+            ...entity,
+            custom_attributes: { ...entityAttributes(entity), layout_image_url: url },
+        };
+    });
+};
+
+export const sceneWhiteModelSheets = (scene, entities, workspaceScene) => {
+    const fromFraming = framingEnvironmentNames(scene?.nodes?.framing?.text);
+    const names = fromFraming.length ? fromFraming : workspaceEnvironmentNames(workspaceScene);
+    const rows = Array.isArray(entities) ? entities : [];
+    const sheets = [];
+    const seen = new Set();
+    names.forEach((name) => {
+        const wanted = compactEnvironmentName(name);
+        if (!wanted) return;
+        const match = rows.filter((row) => {
+            if (!row || row.is_deleted) return false;
+            const type = String(row.type || '').trim().toLowerCase();
+            if (type && !type.includes('env') && !type.includes('环境')) return false;
+            if (isAngledEnvironmentName(row.name) || isAngledEnvironmentName(row.name_en)) return false;
+            return [row.name, row.name_en].some((item) => compactEnvironmentName(item) === wanted);
+        }).sort((left, right) => Number(right?.id || 0) - Number(left?.id || 0))[0];
+        const url = readLayoutImageUrl(match);
+        if (!url || seen.has(url)) return;
+        seen.add(url);
+        sheets.push({ name: String(match?.name || name).trim(), image_url: url });
+    });
+    return sheets;
+};
+
 export const matchWorkspaceScene = (scenes, sceneId) => {
     const rows = Array.isArray(scenes) ? scenes : [];
     const token = compactSceneToken(sceneId);
@@ -445,6 +550,21 @@ export const readChineseVideoPrompt = (shot) => {
     return '';
 };
 
+export const shotWhiteModelSheets = (shot) => {
+    const notes = readTechnicalNotes(shot?.technical_notes);
+    const raw = Array.isArray(shot?.whiteModels)
+        ? shot.whiteModels
+        : (Array.isArray(notes.white_model_sheets) ? notes.white_model_sheets : []);
+    return raw.map((item) => {
+        const url = String(item?.video_url || item?.url || item?.image_url || '').trim();
+        return {
+            name: String(item?.name || '').trim(),
+            url,
+            video: Boolean(item?.video_url) || Boolean(item?.video) || /\.mp4(\?|$)/i.test(url),
+        };
+    }).filter((item) => item.url);
+};
+
 export const normalizeStoryboardShots = (rawShots) => {
     const list = (Array.isArray(rawShots) ? rawShots : []).map((shot, index) => {
         const logic = String(shot?.shot_logic_cn || shot?.logic || '').trim();
@@ -457,6 +577,7 @@ export const normalizeStoryboardShots = (rawShots) => {
             duration: String(shot?.duration || '').trim(),
             logic,
             video,
+            whiteModels: shotWhiteModelSheets(shot),
             beatIds: parseMergedBeatIds(logic),
             order: shotSortKey(shotId, index),
         };

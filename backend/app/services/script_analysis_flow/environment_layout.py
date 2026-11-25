@@ -990,6 +990,7 @@ along_east 是东西向全长，along_north 是南北向全长，单位米。hei
 这一具写了朝向、椅面朝向或屏面朝向，并且不是无，这一行加 face。朝向或椅面朝向是北、东、南、西，face 写这一向。屏面朝向是这四向、而朝向不是这四向，face 写屏面这一向。只有朝上，face="上"。朝向=无，或没写朝向，不加 face。室内面朝向不加 face。
 天空、远景，以及高、厚、沿墙长都没有米的具，不写。
 纹样、颜色、材质不写进脚本。不要加开篇没有的具。
+另附了角色或道具时，人 kind="person"，道具 kind="prop"，每人、每件各写一行。东、北、底、沿东、沿北、高照附上的数，不改。没有附上的角色和道具，不自己加。
 家具占地三个数时，最后一个是 height。只有长×宽时也要写：台、桌、案 height=0.75，床、榻 height=0.55，椅 height=0.9，凳 height=0.45。写了离平地，bottom 就等于那个米。灯 kind="lamp"。桌、椅、凳、床、台 kind="furniture"。
 上=写了高度米数的帐顶、穹顶、天花、顶棚、梁架写成 kind="ceiling"，bottom 等于这个高度，height=0.08，along_east 和 along_north 抄地面。高度=无限制的不上这一行。
 楼梯写低端和高端：kind="ramp"，再写 low_east、low_north、high_east、high_north、low_z、high_z。
@@ -1103,11 +1104,230 @@ def layout_script_gaps(opening: str, boxes: Sequence[LayoutBox]) -> str:
     return "缺这些具：" + "；".join(missing) + "。墙皮和门各写一行。FOCAL_MM 单独一行。"
 
 
-def layout_messages(opening: str, missing: str = "", previous: str = "") -> List[Dict[str, str]]:
+def mass_names(script: str) -> List[str]:
+    return re.findall(r'mass\(\s*"([^"]+)"', str(script or ""))
+
+
+def shot_story_prompt(technical_notes: str, video_content: str = "", shot_logic_cn: str = "") -> str:
+    """The storyboard prompt is the Chinese video prompt. Shot logic is only a fallback."""
+    notes: Dict[str, Any] = {}
+    try:
+        parsed = json.loads(technical_notes or "{}")
+        if isinstance(parsed, dict):
+            notes = parsed
+    except json.JSONDecodeError:
+        notes = {}
+    for item in (notes.get("video_prompt_cn"), video_content, shot_logic_cn):
+        text = str(item or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def shot_anim_seconds(duration: str, prompt: str) -> float:
+    """Clip length from the shot duration, not from a shutter fraction such as 1/96s."""
+    bare = str(duration or "").strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", bare):
+        return max(2.0, min(15.0, float(bare)))
+    text = str(prompt or "")
+    marked = re.search(r"Duration\s*=\s*(\d+(?:\.\d+)?)", text, flags=re.I)
+    if marked:
+        return max(2.0, min(15.0, float(marked.group(1))))
+    ends = [
+        float(item)
+        for item in re.findall(r"(?<![\d/])(\d+(?:\.\d+)?)\s*(?:s|秒)", text, flags=re.I)
+    ]
+    span = max(ends) if ends else 4.0
+    return max(2.0, min(15.0, span))
+
+
+def fallback_motion(view: str, seconds: float) -> str:
+    span = max(2.0, min(15.0, float(seconds or 4)))
+    face = str(view or "north").strip().lower()
+    if face not in {"north", "east", "south", "west"}:
+        face = "north"
+    return (
+        f"SECONDS = {span:.2f}\nFPS = 8\n"
+        f"CAM t=0 view={face} dolly=0 rise=0 pan=0\n"
+        f"CAM t={span:.2f} view={face} dolly=0.8 rise=0.15 pan=0\n"
+    )
+
+
+_ANIM_SYSTEM = """你写白模动画。只输出脚本。不要解释，不要 Markdown。
+第一行 SECONDS = 数字。第二行 FPS = 8。
+相机行：CAM t=秒 view=north|east|south|west dolly=米 rise=米 pan=度 dip=度
+这一镜的 view 只能用指定的那一面。
+dolly=0 是机高 1.60、平视主体、离主体正面两步。dolly 正数靠近主体，0.70 是一臂。负数后退。范围 -1.5 到 1.10。
+rise 是在 1.60 上再抬高，平拍写 0。pan 是水平偏转的度数，范围 -30 到 30。
+dip 是低头的度数，平视写 0，范围 0 到 20。84° 并且画里有台面、插槽或按入时写 12，台面留在下部，人仍留在画里。切到 29° 或要看下颌、眼眶时写 0。
+焦段行：FOCAL t=秒 mm=毫米。84°广角=24，47°=50，29°中长焦=85。范围 18 到 85。
+焦段、dolly、dip 都在写出的那一秒才变，之前保持上一档。景别写了切，就在切换秒写新毫米，不要从 0 秒渐变到切换秒。
+84° 的缓慢逼近只在这一段把 dolly 从 0.70 加到大约 1.00，焦段保持 24。
+切到 29° 或 85mm 时，dolly 回到 0，离主体正面两步，头和肩的边留在画里。不要在长焦时继续靠近，靠近了画面里只剩一块没有边的白面。
+道具被按入、移交、滑出，或从远离镜头移到靠近镜头时，MOVE 这一件。先写 t=0，东和北用现在的位置，再写到达那一秒的位置。
+终点只改靠近镜头的那一轴，改到被按入的那一具靠近镜头的外沿，另一轴保持原数，移动不超过 1 米。
+掀盖、旋转、没有单独名字的晶体不写 MOVE。墙、地面、天花、门、窗不写 MOVE。
+只有提示词写了走、跑、起身、坐下或离开，才 MOVE 人。插、拿、开、看不写 MOVE，人留在原位。
+时间从 0 到 SECONDS。镜头至少两行，t=0 一行，t=SECONDS 一行。
+SECONDS = 15.00
+FPS = 8
+CAM t=0 view=north dolly=0.70 rise=0 pan=0 dip=12
+CAM t=5 view=north dolly=0 rise=0 pan=0 dip=0
+CAM t=15 view=north dolly=0 rise=0 pan=0 dip=0
+FOCAL t=0 mm=24
+FOCAL t=5 mm=85
+FOCAL t=15 mm=85"""
+
+
+def _toward_lens(view: str) -> str:
+    face = str(view or "").strip().lower()
+    if face == "north":
+        return "靠近镜头是北减小，远离镜头是北增大。"
+    if face == "south":
+        return "靠近镜头是北增大，远离镜头是北减小。"
+    if face == "east":
+        return "靠近镜头是东减小，远离镜头是东增大。"
+    if face == "west":
+        return "靠近镜头是东增大，远离镜头是东减小。"
+    return ""
+
+
+def mass_motion_brief(script: str) -> str:
+    """Positions the animation may move: people, props, and furniture."""
+    lines: List[str] = []
+    for raw in str(script or "").splitlines():
+        found = _MASS_CALL.match(raw.strip())
+        if found is None:
+            continue
+        kind = _KIND_WORDS.get(_unquote(found.group("kind")).strip(), "")
+        if kind not in {"person", "prop", "furniture"}:
+            continue
+        name = _unquote(found.group("name")).strip()
+        values: Dict[str, float] = {}
+        for key, token in _MASS_ARG.findall(found.group("rest") or ""):
+            if key in {"east", "north", "bottom", "height", "along_east", "along_north"} and token[:1] not in {"'", '"'}:
+                values[key] = float(token)
+        if "east" not in values or "north" not in values:
+            continue
+        lines.append(
+            f"{name}｜东={values['east']:.2f}｜北={values['north']:.2f}"
+            f"｜沿东={values.get('along_east', 0):.2f}｜沿北={values.get('along_north', 0):.2f}"
+            f"｜底={values.get('bottom', 0):.2f}｜高={values.get('height', 0):.2f}"
+        )
+        if len(lines) >= 24:
+            break
+    return "\n".join(lines)
+
+
+def animation_messages(prompt: str, script: str, view: str, seconds: float) -> List[Dict[str, str]]:
+    text = str(prompt or "").strip()
+    if not text:
+        raise LayoutError("这一镜没有分镜提示词")
+    names = "\n".join(mass_names(script)[:80])
+    brief = mass_motion_brief(script)
+    user = (
+        f"这一镜只拍 {view} 这一面。SECONDS 用 {float(seconds):.2f}。\n"
+        + _toward_lens(view) + "\n"
+        "盒子名字：\n" + names + "\n\n"
+    )
+    if brief:
+        user += "可移动的位置：\n" + brief + "\n\n"
+    user += "分镜提示词：\n" + text[:8000]
+    return [
+        {"role": "system", "content": _ANIM_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+
+def animation_script_from_model_text(text: str, *, view: str, names: Sequence[str], seconds: float) -> str:
+    """Keep camera and named moves. Drop anything that is not this view or this room."""
+    cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"```(?:\w+)?", "", cleaned).strip()
+    face = str(view or "").strip().lower()
+    if face not in {"north", "east", "south", "west"}:
+        raise LayoutError("没有这一面的机位")
+    span = max(2.0, min(15.0, float(seconds or 4)))
+    known = {str(name) for name in names if str(name or "").strip()}
+    cams: List[Tuple[float, float, float, float, float]] = []
+    focals: List[Tuple[float, float]] = []
+    moves: List[Tuple[str, float, float, float]] = []
+    cam_re = re.compile(
+        r"^CAM\s+t=(-?\d+(?:\.\d+)?)\s+view=(north|east|south|west)\s+"
+        r"dolly=(-?\d+(?:\.\d+)?)\s+rise=(-?\d+(?:\.\d+)?)\s+pan=(-?\d+(?:\.\d+)?)"
+        r"(?:\s+dip=(-?\d+(?:\.\d+)?))?\s*$",
+        re.I,
+    )
+    move_re = re.compile(
+        r'^MOVE\s+"([^"]+)"\s+t=(-?\d+(?:\.\d+)?)\s+east=(-?\d+(?:\.\d+)?)\s+north=(-?\d+(?:\.\d+)?)\s*$',
+        re.I,
+    )
+    for raw in cleaned.splitlines():
+        line = raw.strip()
+        cam = cam_re.match(line)
+        if cam:
+            if cam.group(2).lower() != face:
+                continue
+            dip = 0.0 if cam.group(6) is None else float(cam.group(6))
+            cams.append((
+                max(0.0, min(span, float(cam.group(1)))),
+                max(-1.5, min(1.10, float(cam.group(3)))),
+                max(-0.4, min(0.6, float(cam.group(4)))),
+                max(-30.0, min(30.0, float(cam.group(5)))),
+                max(0.0, min(20.0, dip)),
+            ))
+            continue
+        focal = re.match(
+            r"^FOCAL\s+t=(-?\d+(?:\.\d+)?)\s+mm=(-?\d+(?:\.\d+)?)\s*$",
+            line,
+            flags=re.I,
+        )
+        if focal:
+            focals.append((
+                max(0.0, min(span, float(focal.group(1)))),
+                max(18.0, min(85.0, float(focal.group(2)))),
+            ))
+            continue
+        move = move_re.match(line)
+        if move and move.group(1) in known:
+            moves.append((
+                move.group(1),
+                max(0.0, min(span, float(move.group(2)))),
+                float(move.group(3)),
+                float(move.group(4)),
+            ))
+    if not cams:
+        raise LayoutError("动画没有这一面的镜头")
+    cams.sort(key=lambda item: item[0])
+    if cams[0][0] > 0:
+        cams.insert(0, (0.0, cams[0][1], cams[0][2], cams[0][3], cams[0][4]))
+    if cams[-1][0] < span:
+        last = cams[-1]
+        cams.append((span, last[1], last[2], last[3], last[4]))
+    lines = [f"SECONDS = {span:.2f}", "FPS = 8"]
+    focals.sort(key=lambda item: item[0])
+    if focals and focals[0][0] > 0:
+        focals.insert(0, (0.0, focals[0][1]))
+    if focals and focals[-1][0] < span:
+        focals.append((span, focals[-1][1]))
+    for item in cams:
+        lines.append(
+            f"CAM t={item[0]:.2f} view={face} dolly={item[1]:.2f} rise={item[2]:.2f} pan={item[3]:.2f} dip={item[4]:.0f}"
+        )
+    for tick, mm in focals:
+        lines.append(f"FOCAL t={tick:.2f} mm={mm:.0f}")
+    for name, tick, east, north in moves:
+        lines.append(f'MOVE "{name}" t={tick:.2f} east={east:.2f} north={north:.2f}')
+    return "\n".join(lines) + "\n"
+
+
+def layout_messages(opening: str, missing: str = "", previous: str = "", occupants: str = "") -> List[Dict[str, str]]:
     text = str(opening or "").strip()
     if not text:
         raise LayoutError("没有开篇，不能生成布局。")
     user = "以下是开篇原文。规划已经把白模的米、朝向和开闭写在里面。只根据这些写脚本：\n" + text[:80000]
+    people = str(occupants or "").strip()
+    if people:
+        user += "\n\n以下角色和道具必须各写一行，米和 kind 照抄，不改：\n" + people[:12000]
     note = str(missing or "").strip()
     prior = str(previous or "").strip()
     if note:
@@ -1196,6 +1416,8 @@ _KIND_LABEL = {
     "lamp": "灯",
     "ramp": "楼梯",
     "furniture": "家具",
+    "person": "人",
+    "prop": "道具",
 }
 
 
@@ -1220,6 +1442,12 @@ _KIND_WORDS = {
     "梯": "ramp",
     "furniture": "furniture",
     "家具": "furniture",
+    "person": "person",
+    "人": "person",
+    "角色": "person",
+    "prop": "prop",
+    "件": "prop",
+    "道具": "prop",
 }
 
 
@@ -1372,6 +1600,70 @@ def script_from_boxes(boxes: Sequence[LayoutBox], focal: float = 35) -> str:
             parts.append("face=" + json.dumps(box.face, ensure_ascii=False))
         lines.append("mass(" + ", ".join(parts) + ")")
     return "\n".join(lines)
+
+
+def occupant_mass_script(rows: Sequence[Dict[str, Any]]) -> str:
+    """Locked person and prop boxes. The white model keeps these meters."""
+    lines: List[str] = []
+    seen = set()
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        raw_kind = str(row.get("kind") or "").strip()
+        if not name or name in seen:
+            continue
+        if raw_kind in {"人", "person", "角色"}:
+            kind = "person"
+        elif raw_kind in {"件", "prop", "道具"}:
+            kind = "prop"
+        else:
+            continue
+        seen.add(name)
+        face = str(row.get("face") or "").strip()
+        face_bit = ""
+        if face in {"东", "南", "西", "北", "上"}:
+            face_bit = ", face=" + json.dumps(face, ensure_ascii=False)
+        lines.append(
+            "mass("
+            + ", ".join(
+                [
+                    json.dumps(name, ensure_ascii=False),
+                    json.dumps(kind, ensure_ascii=False),
+                    f"east={_script_number(float(row.get('east') or 0))}",
+                    f"north={_script_number(float(row.get('north') or 0))}",
+                    f"along_east={_script_number(float(row.get('along_east') or 0.4))}",
+                    f"along_north={_script_number(float(row.get('along_north') or 0.4))}",
+                    f"height={_script_number(float(row.get('height') or 0.2))}",
+                    f"bottom={_script_number(float(row.get('bottom') or 0))}",
+                ]
+            )
+            + face_bit
+            + ")"
+        )
+    return "\n".join(lines)
+
+
+def merge_occupant_script(script: str, occupants: str) -> str:
+    """Drop model copies of these names and append the locked person and prop lines."""
+    extra = [line.strip() for line in str(occupants or "").splitlines() if line.strip()]
+    if not extra:
+        return str(script or "").strip()
+    names = set()
+    kept_extra: List[str] = []
+    for line in extra:
+        found = _MASS_CALL.match(line)
+        if found is None:
+            continue
+        names.add(_unquote(found.group("name")).strip())
+        kept_extra.append(line)
+    if not kept_extra:
+        return str(script or "").strip()
+    kept: List[str] = []
+    for line in str(script or "").splitlines():
+        found = _MASS_CALL.match(line.strip())
+        if found is not None and _unquote(found.group("name")).strip() in names:
+            continue
+        kept.append(line)
+    return "\n".join([*kept, *kept_extra]).strip()
 
 
 def layout_script_from_model_text(text: str) -> Tuple[str, List[LayoutBox]]:

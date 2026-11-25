@@ -57,6 +57,8 @@ import {
     applyQuadProportionLocks,
     applyWhiteModelQuadReference,
     whiteModelReferenceUrl,
+    consistencyWhiteModel,
+    withWhiteModelEditInstruction,
     readSavedGridRegenPrompt,
     stripMainEnvironmentDraftWrapper,
     resolveSubmittedGridRegenPrompt,
@@ -7588,7 +7590,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return text;
     };
 
-    const submitAdvancedLocalModify = async (entity, instruction) => {
+    const submitAdvancedLocalModify = async (entity, instruction, options = null) => {
         const appended = String(instruction || '').trim();
         const target = entity || viewingEntity;
         const sourceUrl = String(target?.image_url || '').trim();
@@ -7604,16 +7606,30 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         try {
             const base = String(target?.generation_prompt_cn || '');
             const quadEdit = isEnvironmentEntity(target) && /四向拼图|2×2|四宫格/.test(base);
-            const editInstruction = quadEdit ? sealCellEditInstruction(appended) : appended;
+            let whiteModel = options?.whiteModel || null;
+            if (!whiteModel && /白模/.test(appended)) {
+                whiteModel = consistencyWhiteModel(target, allEntitiesRef.current || allEntities);
+            }
+            const whiteModelUrl = String(whiteModel?.url || '').trim();
+            const editInstruction = withWhiteModelEditInstruction(
+                quadEdit ? sealCellEditInstruction(appended) : appended,
+                whiteModelUrl && whiteModelUrl !== sourceUrl ? whiteModel : null
+            );
+            const refs = [{ url: sourceUrl, type: 'image', weight: 0.8 }];
+            if (whiteModelUrl && whiteModelUrl !== sourceUrl && editInstruction.includes('白模')) {
+                refs.push({ url: whiteModelUrl, type: 'image', weight: 0.55 });
+            }
             if (onLog) {
                 onLog(
-                    t('按当前画面做图生图修改，只提交输入框里的修改指令。', 'Editing the current image. Only the instruction in the text box is submitted.'),
+                    refs.length > 1
+                        ? t('按原图修改，白模只锁定主体朝向。', 'Editing the current image. The white model locks subject facing only.')
+                        : t('按当前画面做图生图修改，只提交输入框里的修改指令。', 'Editing the current image. Only the instruction in the text box is submitted.'),
                     'info'
                 );
             }
             await handleGenerate(
                 target,
-                [{ url: sourceUrl, type: 'image', weight: 0.8 }],
+                refs,
                 editInstruction,
                 null,
                 { preserveStoredPrompt: true, imageEditOnly: true }
@@ -7750,7 +7766,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             return;
         }
         try {
-            const result = await checkEnvironmentImageConsistency(entityId, { prompt, note, imageUrl: referenceImageUrl });
+            const library = allEntitiesRef.current || allEntities;
+            const whiteModel = consistencyWhiteModel(entity, library);
+            const result = await checkEnvironmentImageConsistency(entityId, {
+                prompt,
+                note,
+                imageUrl: referenceImageUrl,
+                whiteModelUrl: whiteModel?.url || '',
+                whiteModelScope: whiteModel?.scope || '',
+                whiteModelPosition: whiteModel?.position || '',
+            });
             const absorbed = absorbEnvironmentConsistencyResult(entity, result);
             const { summary, targets, imageEditInstruction, nextEntity } = absorbed;
             if (!imageEditInstruction) {
@@ -7761,11 +7786,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 showSubjectNotification(text, 'success');
                 return;
             }
+            const editText = withWhiteModelEditInstruction(imageEditInstruction, whiteModel);
             const text = summary || t('已按差异生成改图指令，正在局部修改图片。', 'Built an edit instruction from the differences and started a local image edit.');
-            setAdvancedInstruction(imageEditInstruction);
+            setAdvancedInstruction(editText);
             setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
             showSubjectNotification(text, 'success');
-            await submitAdvancedLocalModify(nextEntity, imageEditInstruction);
+            await submitAdvancedLocalModify(nextEntity, editText, { whiteModel });
         } catch (error) {
             const message = consistencyDetailText(error);
             setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
@@ -7802,7 +7828,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 'process'
             );
             if (!waitForImage) setEnvironmentConsistency({ entityId, running: true, text: '', tone: '' });
-            const result = await checkEnvironmentImageConsistency(entityId, { prompt, imageUrl: cropUrl });
+            const library = entities || allEntitiesRef.current || allEntities;
+            const whiteModel = consistencyWhiteModel(entity, library);
+            const whiteUrl = String(whiteModel?.url || '').trim();
+            const facingModel = whiteUrl && whiteUrl !== cropUrl ? whiteModel : null;
+            const result = await checkEnvironmentImageConsistency(entityId, {
+                prompt,
+                imageUrl: cropUrl,
+                whiteModelUrl: facingModel?.url || '',
+                whiteModelScope: facingModel?.scope || '',
+                whiteModelPosition: facingModel?.position || '',
+            });
             const absorbed = absorbEnvironmentConsistencyResult(entity, result);
             const instruction = absorbed.imageEditInstruction;
             if (isSpecialCutDerivedEntity(entity)) {
@@ -7864,14 +7900,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             }
             if (!waitForImage) {
                 if (instruction) {
+                    const editText = withWhiteModelEditInstruction(singleCellEditInstruction(instruction), facingModel);
+                    const refs = [{ url: cropUrl, type: 'image', weight: 0.8 }];
+                    if (facingModel) refs.push({ url: whiteUrl, type: 'image', weight: 0.55 });
                     const text = absorbed.summary || t('已按差异生成改图指令，正在局部修改图片。', 'Built an edit instruction from the differences and started a local image edit.');
-                    setAdvancedInstruction(singleCellEditInstruction(instruction));
+                    setAdvancedInstruction(editText);
                     setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
                     showSubjectNotification(text, 'success');
                     await handleGenerate(
                         absorbed.nextEntity,
-                        [{ url: cropUrl, type: 'image', weight: 0.8 }],
-                        singleCellEditInstruction(instruction),
+                        refs,
+                        editText,
                         { aspect_ratio: '16:9' },
                         { preserveStoredPrompt: true, imageEditOnly: true }
                     );
@@ -7894,7 +7933,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const currentSize = getEpisodePreferredImageSize(currentEpisode?.episode_info || {});
             const nextSize = instruction ? currentSize : bumpImageSizeOption(currentSize);
             let promptToSend = instruction
-                ? singleCellEditInstruction(instruction)
+                ? withWhiteModelEditInstruction(singleCellEditInstruction(instruction), facingModel)
                 : ASSET_QUALITY_REGEN_PROMPT;
             let negativePrompt = '';
             if (!instruction) {
@@ -7902,7 +7941,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 promptToSend = built.prompt;
                 negativePrompt = built.negative_prompt;
             }
-            const res = await generateImage(promptToSend, null, [cropUrl], {
+            const imageRefs = [cropUrl];
+            if (instruction && facingModel) imageRefs.push(whiteUrl);
+            const res = await generateImage(promptToSend, null, imageRefs, {
                 function_name: 'generate_subjects_i2i',
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
@@ -7991,7 +8032,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     onClick={() => { void handleEnvironmentConsistencyCheck(entity); }}
                     disabled={!hasImage || busy}
                     title={hasImage
-                        ? t('对照图片和开篇，核对主体个数、件数核销、朝向、位置。有差异时把改图指令填入下方输入框，并开始局部修改。', 'Compare the image with the opening for subject count, the piece-count ledger, facing, and position. When they differ, fill the edit instruction below and start a local edit.')
+                        ? t('对照图片和开篇，核对主体个数、件数核销、朝向、位置。有白模时，再对照白模核对主体朝向。有差异时按白模朝向改原图。', 'Compare the image with the opening for subject count, the piece-count ledger, facing, and position. When a white model exists, also check subject facing against it, then edit the original to match.')
                         : t('生成图片后才能检查。', 'Generate an image before checking.')}
                     className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-white/80 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >

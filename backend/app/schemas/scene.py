@@ -59,6 +59,10 @@ class SceneScoreGenerateRequest(BaseModel):
     prompt_only: Optional[bool] = False
 
 
+class SceneWhiteModelRequest(BaseModel):
+    scene_marker: str
+
+
 class SceneRegenerateRequest(BaseModel):
     user_requirements: str
     prompt_file: Optional[str] = "scene_regenerate.txt"

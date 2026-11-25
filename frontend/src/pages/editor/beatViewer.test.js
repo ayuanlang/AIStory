@@ -11,6 +11,7 @@ import {
     normalizeStoryboardShots,
     parseMergedBeatIds,
     parseNodeBeats,
+    sceneWhiteModelSheets,
     shotsCoveringBeat,
     splitStagingBeat,
     WHOLE_NODE_BEAT_ID,
@@ -164,6 +165,25 @@ describe('storyboard beat trace', () => {
         assert.deepEqual(shots[0].beatIds, ['1', '2']);
     });
 
+    it('keeps a shot white-model clip with that storyboard', () => {
+        const shots = normalizeStoryboardShots([
+            {
+                id: 3,
+                shot_id: 'EP01_SC01_SH01',
+                shot_logic_cn: '合镜Beat=Beat1｜Duration=4',
+                technical_notes: JSON.stringify({
+                    white_model_sheets: [
+                        { name: '0度客栈大堂', video_url: '/uploads/a.mp4', image_url: '/uploads/a.mp4' },
+                    ],
+                }),
+            },
+        ]);
+        assert.equal(shots[0].whiteModels.length, 1);
+        assert.equal(shots[0].whiteModels[0].name, '0度客栈大堂');
+        assert.equal(shots[0].whiteModels[0].video, true);
+        assert.equal(shots[0].whiteModels[0].url, '/uploads/a.mp4');
+    });
+
     it('shows an unsplit node draft against a beat selected from another node', () => {
         const scenes = buildBeatViewerScenes({
             EP01_SC01: {
@@ -245,6 +265,42 @@ describe('storyboard beat trace', () => {
         const scene = scenes.find((item) => item.sceneId === 'EP01_SC01');
         assert.equal(scene.nodes.staging.text, '');
         assert.match(scene.nodes.drama.text, /文戏/);
+    });
+
+    it('shows the white model of the environment named in this scene', () => {
+        const scene = {
+            nodes: {
+                framing: {
+                    text: `【白模测算】
+环境=客栈大堂｜原点=八仙桌
+具=八仙桌｜东=0｜北=0
+人=CHAR:[@甲]｜拍=开场｜东=0
+【/白模测算】
+【白模测算】
+环境=后院｜原点=地面
+【/白模测算】`,
+                },
+            },
+        };
+        const entities = [
+            { name: '0度客栈大堂', type: 'environment', custom_attributes: { layout_image_url: 'https://cdn.example/angle.png' } },
+            { name: '客栈大堂', type: 'environment', custom_attributes: { layout_image_url: 'https://cdn.example/hall.png' } },
+            { name: '后院', type: 'ENV', custom_attributes: JSON.stringify({ layout_image_url: '/uploads/yard.png' }) },
+            { name: '别处', type: 'environment', custom_attributes: { layout_image_url: 'https://cdn.example/other.png' } },
+        ];
+        const sheets = sceneWhiteModelSheets(scene, entities, { environment_name: '别处' });
+        assert.deepEqual(sheets.map((item) => item.name), ['客栈大堂', '后院']);
+        assert.equal(sheets[0].image_url, 'https://cdn.example/hall.png');
+        const newer = sceneWhiteModelSheets(scene, [
+            { id: 1, name: '客栈大堂', type: 'environment', custom_attributes: { layout_image_url: 'https://cdn.example/old-grid.png' } },
+            { id: 2, name: '客栈大堂', type: 'environment', custom_attributes: { layout_image_url: 'https://cdn.example/panorama.png' } },
+        ], null);
+        assert.equal(newer[0].image_url, 'https://cdn.example/panorama.png');
+        const fallback = sceneWhiteModelSheets({ nodes: {} }, entities, { environment_name: '客栈大堂，别处' });
+        assert.deepEqual(fallback.map((item) => item.image_url), [
+            'https://cdn.example/hall.png',
+            'https://cdn.example/other.png',
+        ]);
     });
 
     it('matches a workspace scene by scene number', () => {

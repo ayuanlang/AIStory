@@ -7,6 +7,7 @@ import {
     buildBeatViewerScenes,
     findNodeBeat,
     matchWorkspaceScene,
+    sceneWhiteModelSheets,
     mergePipelineSceneBlocks,
     omitClearedSceneSteps,
     mergeSubskillResultMaps,
@@ -24,6 +25,13 @@ const ReadBlock = ({ text }) => (
         {text}
     </div>
 );
+
+const absoluteMediaUrl = (url) => {
+    const text = String(url || '').trim();
+    if (!text) return '';
+    if (/^https?:/i.test(text) || text.startsWith('data:')) return text;
+    return `${window.location.origin}${text.startsWith('/') ? text : `/${text}`}`;
+};
 
 const writeClipboard = async (text) => {
     try {
@@ -274,7 +282,9 @@ export default function BeatViewerModal({
     fetchEpisode = null,
     pipelineNodes = [],
     workspaceScenes = [],
+    entities = [],
     fetchShots = null,
+    onRefreshEntities = null,
     clearedSceneSteps = null,
 }) {
     const t = React.useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
@@ -304,6 +314,13 @@ export default function BeatViewerModal({
     const [traceFromShot, setTraceFromShot] = useState(false);
     const [shots, setShots] = useState([]);
     const [shotsStatus, setShotsStatus] = useState('idle');
+    const [whiteModelOpen, setWhiteModelOpen] = useState(false);
+
+    useEffect(() => {
+        if (!open || typeof onRefreshEntities !== 'function') return undefined;
+        onRefreshEntities();
+        return undefined;
+    }, [onRefreshEntities, open]);
 
     useEffect(() => {
         if (!open || !episodeId || typeof fetchEpisode !== 'function') return undefined;
@@ -318,11 +335,16 @@ export default function BeatViewerModal({
     useEffect(() => {
         if (!open) return undefined;
         const onKey = (event) => {
-            if (event.key === 'Escape') onClose?.();
+            if (event.key !== 'Escape') return;
+            if (whiteModelOpen) {
+                setWhiteModelOpen(false);
+                return;
+            }
+            onClose?.();
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [onClose, open]);
+    }, [onClose, open, whiteModelOpen]);
 
     useEffect(() => {
         if (!open) return;
@@ -335,6 +357,13 @@ export default function BeatViewerModal({
         [sceneId, workspaceScenes],
     );
     const dbSceneId = Number(workspaceScene?.id || 0);
+    const whiteModelSheets = useMemo(
+        () => sceneWhiteModelSheets(scene, entities, workspaceScene),
+        [entities, scene, workspaceScene],
+    );
+    useEffect(() => {
+        setWhiteModelOpen(false);
+    }, [sceneId]);
 
     useEffect(() => {
         if (!scene) {
@@ -418,6 +447,13 @@ export default function BeatViewerModal({
         const next = shots[shotIndex + delta];
         if (next) chooseShot(next.key);
     };
+    const shotWhiteModels = displayShots.flatMap((shot) => (
+        (Array.isArray(shot.whiteModels) ? shot.whiteModels : []).map((sheet) => ({
+            ...sheet,
+            shotId: shot.shotId,
+        }))
+    ));
+    const canViewWhiteModel = whiteModelSheets.length > 0 || shotWhiteModels.length > 0;
     const traceHint = (traceFromShot && activeShot)
         ? (activeShot.beatIds.length
             ? t(
@@ -487,6 +523,31 @@ export default function BeatViewerModal({
                             ))}
                         </select>
                     </label>
+                    <div className="pt-4">
+                        <button
+                            type="button"
+                            onClick={async () => {
+                                if (typeof onRefreshEntities === 'function') {
+                                    try {
+                                        await onRefreshEntities();
+                                    } catch {
+                                        // Keep the picture already on this scene if the refresh fails.
+                                    }
+                                }
+                                setWhiteModelOpen(true);
+                            }}
+                            disabled={!canViewWhiteModel}
+                            title={canViewWhiteModel
+                                ? t('查看这一场的白模，以及当前分镜的白模动画', 'View this scene’s white model and the current shot’s clip')
+                                : t('这一场和当前分镜都还没有白模', 'This scene and the current shot have no white model yet')}
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-sky-400/35 bg-sky-500/15 px-3 text-xs font-bold text-sky-100 transition-colors hover:bg-sky-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            <Layers className="h-3.5 w-3.5" />
+                            {(whiteModelSheets.length + shotWhiteModels.length) > 1
+                                ? t(`查看白模（${whiteModelSheets.length + shotWhiteModels.length}）`, `White model (${whiteModelSheets.length + shotWhiteModels.length})`)
+                                : t('查看白模', 'White model')}
+                        </button>
+                    </div>
                     <label className="flex min-w-[220px] flex-[1.4] flex-col gap-1 text-[10px] font-semibold tracking-wide text-white/45">
                         {t('节拍', 'Beat')}
                         <select
@@ -603,6 +664,88 @@ export default function BeatViewerModal({
                     )}
                 </div>
             </div>
+            {whiteModelOpen ? (
+                <div
+                    className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        setWhiteModelOpen(false);
+                    }}
+                >
+                    <div
+                        className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#161616] shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                            <div className="min-w-0">
+                                <div className="truncate text-sm font-bold text-white">
+                                    {t('白模', 'White model')}
+                                    {scene?.name ? ` · ${scene.name}` : (scene?.sceneId ? ` · ${scene.sceneId}` : '')}
+                                </div>
+                                <div className="text-[11px] text-white/40">
+                                    {shotWhiteModels.length
+                                        ? t('这一场的白模，以及当前分镜的白模动画', 'This scene’s white model, and the current shot’s clip')
+                                        : t('这一场主环境的白模', 'White model for this scene’s main environment')}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setWhiteModelOpen(false)}
+                                className="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-bold text-white hover:bg-white/20"
+                                aria-label={t('关闭白模', 'Close white model')}
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+                        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                            {whiteModelSheets.map((sheet) => {
+                                const url = String(sheet.image_url || '').trim();
+                                const full = absoluteMediaUrl(url);
+                                return (
+                                    <figure key={`scene-${sheet.name}-${url}`} className="m-0">
+                                        <figcaption className="mb-2 text-xs font-semibold text-white/70">
+                                            {t('这一场', 'This scene')}
+                                            {sheet.name ? ` · ${sheet.name}` : ''}
+                                        </figcaption>
+                                        <a href={full} target="_blank" rel="noreferrer" className="block">
+                                            <img
+                                                src={full}
+                                                alt={sheet.name}
+                                                className="max-h-[70vh] w-full rounded-lg border border-white/10 bg-white object-contain"
+                                            />
+                                        </a>
+                                    </figure>
+                                );
+                            })}
+                            {shotWhiteModels.map((sheet) => {
+                                const full = absoluteMediaUrl(sheet.url);
+                                const caption = `${sheet.shotId || t('分镜', 'Shot')}${sheet.name ? ` · ${sheet.name}` : ''}`;
+                                return (
+                                    <figure key={`shot-${sheet.shotId}-${sheet.url}`} className="m-0">
+                                        <figcaption className="mb-2 text-xs font-semibold text-white/70">{caption}</figcaption>
+                                        {sheet.video ? (
+                                            <video
+                                                src={full}
+                                                controls
+                                                playsInline
+                                                className="max-h-[70vh] w-full rounded-lg border border-white/10 bg-black"
+                                            />
+                                        ) : (
+                                            <a href={full} target="_blank" rel="noreferrer" className="block">
+                                                <img
+                                                    src={full}
+                                                    alt={caption}
+                                                    className="max-h-[70vh] w-full rounded-lg border border-white/10 bg-white object-contain"
+                                                />
+                                            </a>
+                                        )}
+                                    </figure>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

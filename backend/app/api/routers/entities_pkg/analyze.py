@@ -1249,6 +1249,9 @@ class EnvironmentConsistencyBody(BaseModel):
     prompt: Optional[str] = None
     note: Optional[str] = None
     image_url: Optional[str] = None
+    white_model_url: Optional[str] = None
+    white_model_scope: Optional[str] = None
+    white_model_position: Optional[str] = None
 
 
 @router.post("/entities/{entity_id}/environment-consistency")
@@ -1284,6 +1287,7 @@ async def check_environment_consistency(
         plan_consistency_writes,
         remote_vision_image_link,
         resolve_checked_prompt,
+        resolve_consistency_white_model,
     )
 
     entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
@@ -1350,6 +1354,35 @@ async def check_environment_consistency(
     if not image_url_final:
         raise HTTPException(status_code=400, detail="生成图片无法读取，暂时不能做一致性检查。")
 
+    white_model = resolve_consistency_white_model(
+        entity,
+        main_entity,
+        depended_entity,
+        kind=kind,
+        checked_image_url=source_image,
+        requested_url=str(getattr(payload, "white_model_url", None) or ""),
+        requested_scope=str(getattr(payload, "white_model_scope", None) or ""),
+        requested_position=str(getattr(payload, "white_model_position", None) or ""),
+    )
+    white_model_url_final = ""
+    if white_model["url"]:
+        try:
+            refreshed_white = _refresh_managed_media_url(white_model["url"], db)
+            white_model_url_final = remote_vision_image_link(refreshed_white)
+            if not white_model_url_final:
+                white_model_url_final = await resolve_image_url_for_llm(white_model["url"], db)
+        except Exception:
+            logger.info("Environment consistency check skipped an unreadable white model", exc_info=True)
+            white_model_url_final = ""
+        if white_model_url_final and white_model_url_final == image_url_final:
+            white_model_url_final = ""
+        if white_model_url_final:
+            logger.info(
+                "Environment consistency check uses white model host=%s scope=%s",
+                urlparse(white_model_url_final).hostname,
+                white_model["scope"],
+            )
+
     note = str(getattr(payload, "note", None) or "").strip()[:2000]
     messages = build_consistency_messages(
         image_url=image_url_final,
@@ -1359,6 +1392,9 @@ async def check_environment_consistency(
         kind=kind,
         note=note,
         depended_entity=depended_entity,
+        white_model_url=white_model_url_final,
+        white_model_scope=white_model["scope"],
+        white_model_position=white_model["position"],
     )
     call_config = {
         "provider": api_provider,
@@ -1379,7 +1415,7 @@ async def check_environment_consistency(
 
     if billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
         est = billing_service.estimate_reserve_tokens_from_messages(messages)
-        estimated_image_tokens = 1000
+        estimated_image_tokens = 2000 if white_model_url_final else 1000
         est_input = int(est.get("input_tokens", 0) or 0) + estimated_image_tokens
         est_output = int(math.ceil(float(est_input) * billing_service.RESERVE_OUTPUT_RATIO)) if est_input > 0 else 0
         reservation_tx = billing_service.reserve_credits(
@@ -1471,11 +1507,12 @@ async def check_environment_consistency(
         )
         if had_reservation:
             current_input = billing_details.get("prompt_tokens", billing_details.get("input_tokens", 0))
+            image_token_floor = 2000 if white_model_url_final else 1000
             if current_input < 200:
-                billing_details["input_tokens"] = int(current_input or 0) + 1000
+                billing_details["input_tokens"] = int(current_input or 0) + image_token_floor
                 billing_details["prompt_tokens"] = billing_details["input_tokens"]
                 if "total_tokens" in billing_details:
-                    billing_details["total_tokens"] = int(billing_details.get("total_tokens") or 0) + 1000
+                    billing_details["total_tokens"] = int(billing_details.get("total_tokens") or 0) + image_token_floor
         _finalize_model_invocation_billing(
             db=db,
             current_user=current_user,

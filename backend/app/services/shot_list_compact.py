@@ -33,6 +33,27 @@ _SHOT_LIST_COMPACT_TECH_KEYS = (
     "multi_panel_generated",
     "storyboard_url",
 )
+
+
+def _compact_white_model_sheets(raw: Any) -> list:
+    if not isinstance(raw, list):
+        return []
+    kept = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("video_url") or item.get("image_url") or "").strip()
+        if not url:
+            continue
+        kept.append({
+            "name": str(item.get("name") or "").strip(),
+            "angle": item.get("angle"),
+            "image_url": str(item.get("image_url") or url).strip(),
+            "video_url": str(item.get("video_url") or url).strip(),
+        })
+    return kept
+
+
 def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], str, str]:
     notes = _asset_meta_to_dict(raw_notes)
     if not notes:
@@ -64,6 +85,13 @@ def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], s
 
     if end_frame_url and "end_frame_url" not in compact_notes:
         compact_notes["end_frame_url"] = end_frame_url
+
+    sheets = _compact_white_model_sheets(notes.get("white_model_sheets"))
+    if sheets:
+        compact_notes["white_model_sheets"] = sheets
+    beat = str(notes.get("white_model_beat") or "").strip()
+    if beat:
+        compact_notes["white_model_beat"] = beat
 
     compact_payload = json.dumps(compact_notes, ensure_ascii=False) if compact_notes else None
     return compact_payload, end_frame_url, prompt_preview_cn

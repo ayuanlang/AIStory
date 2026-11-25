@@ -3148,6 +3148,22 @@ export const generateSceneScore = async (episodeId, payload) => {
     return response.data;
 };
 
+export const generateShotWhiteModel = async (shotId) => {
+    const response = await api.post(`/shots/${shotId}/white-model`, null, {
+        timeout: 600000,
+    });
+    return response.data;
+};
+
+export const generateSceneWhiteModel = async (episodeId, sceneMarker) => {
+    const response = await api.post(`/episodes/${episodeId}/scene-white-model`, {
+        scene_marker: sceneMarker,
+    }, {
+        timeout: 600000,
+    });
+    return response.data;
+};
+
 export const generateVoice = async (prompt, provider = null, model = null, options = {}) => {
     const payload = {
         prompt,
@@ -3868,7 +3884,7 @@ export const resolveScriptAnalysisSystemApiId = (functionName = 'script_analysis
     return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
 };
 
-export const checkEnvironmentImageConsistency = async (entityId, { prompt, note, imageUrl, systemApiId } = {}) => {
+export const checkEnvironmentImageConsistency = async (entityId, { prompt, note, imageUrl, whiteModelUrl, whiteModelScope, whiteModelPosition, systemApiId } = {}) => {
     const finalApiId = systemApiId || resolveScriptAnalysisSystemApiId('script_analysis', null);
     const params = new URLSearchParams();
     if (finalApiId) params.append('system_api_id', String(finalApiId));
@@ -3876,10 +3892,16 @@ export const checkEnvironmentImageConsistency = async (entityId, { prompt, note,
     const qs = params.toString();
     if (qs) url += `?${qs}`;
     const image = String(imageUrl || '').trim();
+    const whiteModel = String(whiteModelUrl || '').trim();
     const response = await api.post(url, {
         prompt: String(prompt || ''),
         note: String(note || '').trim(),
         ...(image ? { image_url: image } : {}),
+        ...(whiteModel ? {
+            white_model_url: whiteModel,
+            white_model_scope: String(whiteModelScope || '').trim(),
+            white_model_position: String(whiteModelPosition || '').trim(),
+        } : {}),
     });
     return response.data;
 };

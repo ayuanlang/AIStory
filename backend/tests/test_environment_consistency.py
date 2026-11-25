@@ -12,6 +12,7 @@ from app.services.script_analysis_flow.environment_consistency import (
     parse_consistency_payload,
     plan_consistency_writes,
     remote_vision_image_link,
+    resolve_consistency_white_model,
 )
 
 
@@ -951,6 +952,87 @@ def test_quad_edit_drops_corner_labels_the_source_never_had():
         kind="main",
     )
     assert "角标" not in messages[0]["content"]
+    assert "另附白模图" not in messages[0]["content"]
+
+
+def test_white_model_is_a_facing_reference_for_the_quad():
+    entity = Dummy(
+        id=7,
+        prompt=MAIN_PROMPT,
+        attrs={"layout_image_url": "https://cdn.example/clay.png"},
+    )
+    found = resolve_consistency_white_model(entity, entity, kind="main", checked_image_url="https://cdn.example/grid.png")
+    assert found == {"url": "https://cdn.example/clay.png", "scope": "quad", "position": ""}
+    messages = build_consistency_messages(
+        image_url="https://cdn.example/grid.png",
+        entity=entity,
+        main_entity=entity,
+        checked_prompt=MAIN_PROMPT,
+        kind="main",
+        white_model_url=found["url"],
+        white_model_scope=found["scope"],
+        white_model_position=found["position"],
+    )
+    system = messages[0]["content"]
+    assert "另附白模图" in system
+    assert "主体朝向" in system
+    assert "按白模全景里这一具的朝向改原图对应格" in system
+    assert "不是四宫" in system
+    assert "长短边等朝向与白模不一致的，与白模保持一致" in system
+    assert "不按白模改开篇" in system
+    assert system.index("另附白模图") < system.index("只返回 JSON")
+    user = messages[1]["content"]
+    assert user[1]["image_url"]["url"] == "https://cdn.example/grid.png"
+    assert user[2]["image_url"]["url"] == "https://cdn.example/clay.png"
+    assert "第二张图是白模" in user[0]["text"]
+    same = resolve_consistency_white_model(
+        entity,
+        entity,
+        kind="main",
+        checked_image_url="https://cdn.example/clay.png",
+    )
+    assert same["url"] == ""
+
+
+def test_white_model_for_a_cell_names_that_quadrant():
+    main = Dummy(
+        id=3,
+        name="厨房",
+        prompt=MAIN_PROMPT,
+        attrs={"layout_image_url": "https://cdn.example/clay.png"},
+    )
+    cell = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "view_angle_from_main": 90, "main_environment": "厨房"},
+    )
+    found = resolve_consistency_white_model(
+        cell,
+        main,
+        kind="cell",
+        checked_image_url="https://cdn.example/crop.png",
+    )
+    assert found["url"] == "https://cdn.example/clay.png"
+    assert found["scope"] == "sheet"
+    assert found["position"] == "右上"
+    messages = build_consistency_messages(
+        image_url="https://cdn.example/crop.png",
+        entity=cell,
+        main_entity=main,
+        checked_prompt="",
+        kind="cell",
+        white_model_url=found["url"],
+        white_model_scope=found["scope"],
+        white_model_position=found["position"],
+    )
+    system = messages[0]["content"]
+    assert "原图是已经裁出的右上格" in system
+    assert "白模全景" in system
+    assert "不要因为原图没有另外三格就判少件" in system
+    assert "按白模全景里这一具的朝向改" in system
+    assert "长短边等朝向与白模不一致的，与白模保持一致" in system
+    assert messages[1]["content"][2]["image_url"]["url"] == "https://cdn.example/clay.png"
 
 
 def test_consistency_check_passes_public_image_link():

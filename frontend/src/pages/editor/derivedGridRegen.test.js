@@ -24,6 +24,8 @@ import {
     singleCellEditInstruction,
     stripProjectStyleInjection,
     applyWhiteModelQuadReference,
+    consistencyWhiteModel,
+    withWhiteModelEditInstruction,
     quadImagePrompt,
     applyQuadProportionLocks,
 } from './derivedGridRegen.js';
@@ -680,7 +682,7 @@ describe('white model reference for the four-grid', () => {
             ['https://cdn.example/style.png', 'https://cdn.example/clay.png'],
             entity
         );
-        assert.match(applied.prompt, /^朝向参考：第一张参考图只锁定每一格里哪一面朝向镜头/);
+        assert.match(applied.prompt, /^朝向参考：第一张参考图是这一处的白模全景/);
         assert.doesNotMatch(applied.prompt, /占画面的比例照这张白模/);
         assert.match(applied.prompt, /朝向边上的短划只标这一面/);
         assert.match(applied.prompt, /颜色、材质、纹样、光线和光比按后面的文字/);
@@ -709,6 +711,88 @@ describe('white model reference for the four-grid', () => {
         const applied = applyWhiteModelQuadReference('【四向拼图】', ['https://cdn.example/a.png'], {});
         assert.equal(applied.prompt, '【四向拼图】');
         assert.deepEqual(applied.refs, ['https://cdn.example/a.png']);
+    });
+});
+
+describe('white model facing check', () => {
+    const main = {
+        id: 3,
+        type: 'environment',
+        name: '厨房',
+        image_url: 'https://cdn.example/kitchen.png',
+        custom_attributes: { layout_image_url: 'https://cdn.example/clay.png' },
+    };
+
+    it('uses the asset white model for a four-grid check', () => {
+        const found = consistencyWhiteModel(main, [main]);
+        assert.deepEqual(found, {
+            url: 'https://cdn.example/clay.png',
+            scope: 'quad',
+            position: '',
+        });
+    });
+
+    it('uses the owning main white model and names the cell', () => {
+        const cell = {
+            id: 9,
+            type: 'environment',
+            name: '90度厨房',
+            image_url: 'https://cdn.example/cell.png',
+            custom_attributes: {
+                derived_kind: 'first_cut',
+                view_angle_from_main: 90,
+                main_environment: '厨房',
+            },
+        };
+        const found = consistencyWhiteModel(cell, [main, cell]);
+        assert.equal(found.url, 'https://cdn.example/clay.png');
+        assert.equal(found.scope, 'sheet');
+        assert.equal(found.position, '右上');
+    });
+
+    it('falls back to the source main when a derived main has no white model', () => {
+        const source = {
+            id: 1,
+            type: 'environment',
+            name: '办公室',
+            custom_attributes: { layout_image_url: 'https://cdn.example/office-clay.png' },
+        };
+        const derived = {
+            id: 2,
+            type: 'environment',
+            name: '办公室_破损',
+            custom_attributes: { derived_kind: 'derived_main', source_main_environment: '办公室' },
+        };
+        const found = consistencyWhiteModel(derived, [source, derived]);
+        assert.equal(found.url, 'https://cdn.example/office-clay.png');
+        assert.equal(found.scope, 'quad');
+    });
+
+    it('returns nothing when no white model is stored', () => {
+        assert.equal(consistencyWhiteModel({ type: 'environment', name: '厨房' }, []), null);
+    });
+
+    it('tells the edit to follow the white model facing and does not repeat the lead', () => {
+        const quad = withWhiteModelEditInstruction('改左上格的台。', {
+            url: 'https://cdn.example/clay.png',
+            scope: 'quad',
+        });
+        assert.match(quad, /^第一张是要改的原图/);
+        assert.match(quad, /主体朝向按这张全景里每一具的朝向修改第一张对应格/);
+        assert.match(quad, /长短边等朝向与白模不一致的，与白模保持一致/);
+        assert.match(quad, /不是四宫/);
+        assert.match(quad, /改左上格的台/);
+        assert.equal(withWhiteModelEditInstruction(quad, { url: 'https://cdn.example/clay.png', scope: 'quad' }), quad);
+        const cell = withWhiteModelEditInstruction('改门。', {
+            url: 'https://cdn.example/clay.png',
+            scope: 'sheet',
+            position: '右上',
+        });
+        assert.match(cell, /已经裁出的右上格/);
+        assert.match(cell, /白模全景/);
+        assert.match(cell, /长短边等朝向与白模不一致的，与白模保持一致/);
+        assert.match(cell, /不要把另外三格画回来/);
+        assert.equal(withWhiteModelEditInstruction('改门。', null), '改门。');
     });
 });
 

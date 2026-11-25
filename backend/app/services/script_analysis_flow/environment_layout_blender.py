@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Run a white-model script in Blender and render the four-grid sheet.
+"""Run a white-model script in Blender.
 
-The model writes mass() calls. This module supplies the Blender scene and the
-four cameras: look north, east, south, west. The sheet sent to the image model
-is an orientation drawing: black lines on white. A short tab marks the facing
-side. Fill, shadow, and lamp color stay out of this sheet.
+The model writes mass() calls. A scene white model is one overhead frame of the
+interior: the camera sits above the floor and looks straight down, and the
+ceiling stays out of the picture. A shot white model is one frame looking
+north, east, south, or west.
+The picture is an orientation drawing: black lines on white. A short tab marks
+the facing side. Fill, shadow, and lamp color stay out of the picture.
 """
 from __future__ import annotations
 
@@ -15,15 +17,12 @@ import subprocess
 import tempfile
 from typing import List
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 
 class LayoutRenderError(RuntimeError):
     """Blender could not render the white model."""
 
-
-_SHEET = (1280, 720)
-_CELL = (640, 360)
 
 _BLENDER_TEMPLATE = r"""
 import base64
@@ -37,6 +36,8 @@ from mathutils import Matrix, Vector
 
 OUT = sys.argv[sys.argv.index("--") + 1]
 SCRIPT = base64.b64decode("{script_b64}").decode("utf-8")
+VIEW = "{view}"
+MOTION = base64.b64decode("{motion_b64}").decode("utf-8")
 
 for obj in list(bpy.data.objects):
     bpy.data.objects.remove(obj, do_unlink=True)
@@ -232,7 +233,14 @@ def camera(name, location, target):
     obj = bpy.data.objects.new(name, data)
     obj.location = location
     direction = Vector(target) - Vector(location)
-    obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+    if direction.length < 1e-6:
+        direction = Vector((0.0, 0.0, -1.0))
+    # Straight down keeps north toward the top of the frame. A look-at up-axis
+    # parallel to the view direction twists the plan.
+    if abs(direction.normalized().z) > 0.98:
+        obj.rotation_euler = (0.0, 0.0, 0.0) if direction.z <= 0 else (math.pi, 0.0, 0.0)
+    else:
+        obj.rotation_euler = direction.to_track_quat("-Z", "Z").to_euler()
     bpy.context.scene.collection.objects.link(obj)
     return obj
 
@@ -305,7 +313,7 @@ def clamp_inside(value, rear, far, look_sign):
     return max(min(value, inner_rear), inner_far)
 
 def occupies(item, point):
-    if item["kind"] not in {{"furniture", "lamp", "door"}}:
+    if item["kind"] not in {{"furniture", "lamp", "door", "person", "prop"}}:
         return False
     if not still_here(item):
         return False
@@ -401,54 +409,79 @@ def interior_pose(look):
     dist = fill_distance(width, height)
     return near - component * dist, cam_z, far, cam_z, sideways
 
-views = (
-    ("north", "north", -1, Vector((0.0, 1.0, 0.0))),
-    ("east", "east", -1, Vector((1.0, 0.0, 0.0))),
-    ("south", "north", 1, Vector((0.0, -1.0, 0.0))),
-    ("west", "east", 1, Vector((-1.0, 0.0, 0.0))),
-)
 posts = []
-for view_name, axis, sign, cardinal in views:
-    hidden = rear_of(axis, sign) if inside else []
-    look = cardinal.normalized()
-    if abs(look.y) > 0.5:
-        span_w = high.x - low.x
-        far = high.y if look.y > 0 else low.y
-        rear = low.y if look.y > 0 else high.y
-        if inside:
-            cam_axis, cam_z, aim_axis, aim_z, sideways = interior_pose(look)
-            center_x = sideways
-        else:
-            near = low.y if look.y > 0 else high.y
-            cam_axis = near - look.y * fill_distance(span_w, room_h)
-            cam_z = mid_z
-            aim_axis = center_y
-            aim_z = mid_z
-        cam = clear_props(Vector((center_x, cam_axis, cam_z)), look, rear, far, hidden)
-        aim = Vector((center_x, aim_axis, aim_z))
+if not VIEW:
+    roofs = [item for item in MADE if item["kind"] == "ceiling" and still_here(item)]
+    finite = [item for item in MADE if item["kind"] == "floor" and still_here(item) and item["along_east"] <= 20 and item["along_north"] <= 20]
+    standing = [item for item in MADE if item["kind"] != "ceiling" and still_here(item)]
+    if finite:
+        slab = finite[0]
+        span_x = max(slab["along_east"], 0.5)
+        span_y = max(slab["along_north"], 0.5)
+        aim_x = slab["east"]
+        aim_y = slab["north"]
+        aim_z = slab["bottom"]
     else:
-        span_w = high.y - low.y
-        far = high.x if look.x > 0 else low.x
-        rear = low.x if look.x > 0 else high.x
-        if inside:
-            cam_axis, cam_z, aim_axis, aim_z, sideways = interior_pose(look)
-            center_y = sideways
+        span_x = max(high.x - low.x, 0.5)
+        span_y = max(high.y - low.y, 0.5)
+        aim_x = center_x
+        aim_y = center_y
+        aim_z = low.z
+    top = max((item["bottom"] + item["height"]) for item in standing) if standing else high.z
+    dist = max(span_x / 2.0 / max(tan_h, 0.08), span_y / 2.0 / max(tan_v, 0.08)) * 1.18
+    cam_z = max(aim_z + dist, top + 0.45)
+    posts.append(("panorama", (aim_x, aim_y, cam_z), (aim_x, aim_y, aim_z), roofs))
+else:
+    all_views = (
+        ("north", "north", -1, Vector((0.0, 1.0, 0.0))),
+        ("east", "east", -1, Vector((1.0, 0.0, 0.0))),
+        ("south", "north", 1, Vector((0.0, -1.0, 0.0))),
+        ("west", "east", 1, Vector((-1.0, 0.0, 0.0))),
+    )
+    views = tuple(item for item in all_views if item[0] == VIEW)
+    if not views:
+        raise RuntimeError("没有这一面的机位")
+    for view_name, axis, sign, cardinal in views:
+        hidden = rear_of(axis, sign) if inside else []
+        look = cardinal.normalized()
+        if abs(look.y) > 0.5:
+            span_w = high.x - low.x
+            far = high.y if look.y > 0 else low.y
+            rear = low.y if look.y > 0 else high.y
+            if inside:
+                cam_axis, cam_z, aim_axis, aim_z, sideways = interior_pose(look)
+                center_x = sideways
+            else:
+                near = low.y if look.y > 0 else high.y
+                cam_axis = near - look.y * fill_distance(span_w, room_h)
+                cam_z = mid_z
+                aim_axis = center_y
+                aim_z = mid_z
+            cam = clear_props(Vector((center_x, cam_axis, cam_z)), look, rear, far, hidden)
+            aim = Vector((center_x, aim_axis, aim_z))
         else:
-            near = low.x if look.x > 0 else high.x
-            cam_axis = near - look.x * fill_distance(span_w, room_h)
-            cam_z = mid_z
-            aim_axis = center_x
-            aim_z = mid_z
-        cam = clear_props(Vector((cam_axis, center_y, cam_z)), look, rear, far, hidden)
-        aim = Vector((aim_axis, center_y, aim_z))
-    posts.append((view_name, (cam.x, cam.y, cam.z), (aim.x, aim.y, aim.z), hidden))
+            span_w = high.y - low.y
+            far = high.x if look.x > 0 else low.x
+            rear = low.x if look.x > 0 else high.x
+            if inside:
+                cam_axis, cam_z, aim_axis, aim_z, sideways = interior_pose(look)
+                center_y = sideways
+            else:
+                near = low.x if look.x > 0 else high.x
+                cam_axis = near - look.x * fill_distance(span_w, room_h)
+                cam_z = mid_z
+                aim_axis = center_x
+                aim_z = mid_z
+            cam = clear_props(Vector((cam_axis, center_y, cam_z)), look, rear, far, hidden)
+            aim = Vector((aim_axis, center_y, aim_z))
+        posts.append((view_name, (cam.x, cam.y, cam.z), (aim.x, aim.y, aim.z), hidden))
 
 scene = bpy.context.scene
 scene.render.engine = "BLENDER_WORKBENCH"
 scene.view_settings.view_transform = "Standard"
 scene.view_settings.exposure = 0.0
-scene.render.resolution_x = 640
-scene.render.resolution_y = 360
+scene.render.resolution_x = 1280
+scene.render.resolution_y = 720
 scene.render.resolution_percentage = 100
 scene.render.film_transparent = False
 scene.render.image_settings.file_format = "PNG"
@@ -463,14 +496,180 @@ if hasattr(shading, "background_type"):
 if hasattr(shading, "background_color"):
     shading.background_color = (1.0, 1.0, 1.0)
 
-for name, location, target, hidden in posts:
+def motion_pose(base, aim, dolly, rise, pan_deg, dip_deg=0.0):
+    forward = Vector(aim) - Vector(base)
+    flat = Vector((forward.x, forward.y, 0.0))
+    if flat.length < 1e-4:
+        flat = Vector((0.0, 1.0, 0.0))
+    else:
+        flat = flat.normalized()
+    look = Matrix.Rotation(math.radians(float(pan_deg)), 4, "Z") @ forward
+    loc = Vector(base) + flat * float(dolly) + Vector((0.0, 0.0, float(rise)))
+    dip = math.radians(max(0.0, min(20.0, float(dip_deg))))
+    level = Vector((look.x, look.y, 0.0))
+    focus = loc + Vector((level.x * math.cos(dip), level.y * math.cos(dip), -level.length * math.sin(dip)))
+    return loc, focus
+
+def frame_of(tick, seconds, last):
+    if seconds <= 0:
+        return 1
+    return max(1, min(last, 1 + int(round((float(tick) / seconds) * (last - 1)))))
+
+def linearize(obj, step=False):
+    data = obj.animation_data
+    action = data.action if data is not None else None
+    curves = getattr(action, "fcurves", None) if action is not None else None
+    mode = "CONSTANT" if step else "LINEAR"
+    for curve in curves or []:
+        for point in curve.keyframe_points:
+            point.interpolation = mode
+
+def subject_stand(look):
+    people = [item for item in MADE if item["kind"] == "person" and still_here(item)]
+    subject = people[0] if people else central_subject()
+    if subject is None:
+        return None
+    finite = [item for item in MADE if item["kind"] == "floor" and still_here(item) and item["along_east"] <= 20 and item["along_north"] <= 20]
+    floor_z = (finite[0]["bottom"] + finite[0]["height"]) if finite else 0.0
+    cam_z = floor_z + 1.60
+    if abs(look.y) > 0.5:
+        front = subject["north"] - math.copysign(subject["along_north"] / 2.0, look.y)
+        cam_x = subject["east"]
+        cam_y = front - look.y * 1.40
+        aim_x = subject["east"]
+        aim_y = subject["north"]
+    else:
+        front = subject["east"] - math.copysign(subject["along_east"] / 2.0, look.x)
+        cam_y = subject["north"]
+        cam_x = front - look.x * 1.40
+        aim_x = subject["east"]
+        aim_y = subject["north"]
+    if finite:
+        slab = finite[0]
+        pad = 0.35
+        cam_x = min(max(cam_x, slab["east"] - slab["along_east"] / 2.0 + pad), slab["east"] + slab["along_east"] / 2.0 - pad)
+        cam_y = min(max(cam_y, slab["north"] - slab["along_north"] / 2.0 + pad), slab["north"] + slab["along_north"] / 2.0 - pad)
+    return (cam_x, cam_y, cam_z), (aim_x, aim_y, cam_z)
+
+if MOTION.strip():
+    seconds = 4.0
+    fps = 8
+    cams = []
+    focals = []
+    moves = []
+    for raw in MOTION.splitlines():
+        line = raw.strip()
+        if line.startswith("SECONDS"):
+            seconds = max(1.0, float(line.split("=", 1)[1]))
+        elif line.startswith("FPS"):
+            fps = max(4, int(float(line.split("=", 1)[1])))
+        elif line.startswith("CAM"):
+            fields = {{}}
+            for part in line.split()[1:]:
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    fields[key] = value
+            cams.append(fields)
+        elif line.startswith("FOCAL"):
+            fields = {{}}
+            for part in line.split()[1:]:
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    fields[key] = value
+            focals.append(fields)
+        elif line.startswith("MOVE"):
+            bits = line.split('"', 2)
+            if len(bits) < 3:
+                continue
+            fields = {{"name": bits[1]}}
+            for part in bits[2].split():
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    fields[key] = value
+            moves.append(fields)
+    if not posts:
+        raise RuntimeError("没有这一面的机位")
+    name, location, target, hidden = posts[0]
+    cardinals = {{
+        "north": Vector((0.0, 1.0, 0.0)),
+        "east": Vector((1.0, 0.0, 0.0)),
+        "south": Vector((0.0, -1.0, 0.0)),
+        "west": Vector((-1.0, 0.0, 0.0)),
+    }}
+    posed = subject_stand(cardinals.get(VIEW, Vector((0.0, 1.0, 0.0))))
+    if posed is not None:
+        location, target = posed
     for item in hidden:
         set_hidden(item, True)
-    scene.camera = camera(name, location, target)
-    scene.render.filepath = os.path.join(OUT, name + ".png")
-    bpy.ops.render.render(write_still=True)
-    for item in hidden:
-        set_hidden(item, False)
+    last = max(2, int(round(seconds * fps)))
+    scene.frame_start = 1
+    scene.frame_end = last
+    scene.render.fps = fps
+    scene.render.resolution_x = 854
+    scene.render.resolution_y = 480
+    cam_obj = camera(name, location, target)
+    scene.camera = cam_obj
+    def focal_now(tick):
+        chosen = float(focal)
+        best_t = -1.0
+        for item in focals:
+            try:
+                mark = float(item.get("t", 0))
+                mm = float(item.get("mm", chosen))
+            except (TypeError, ValueError):
+                continue
+            if mark <= float(tick) + 1e-3 and mark >= best_t:
+                best_t = mark
+                chosen = mm
+        return max(18.0, min(85.0, chosen))
+
+    for fields in cams or [{{"t": "0", "dolly": "0", "rise": "0", "pan": "0"}}]:
+        try:
+            dolly = float(fields.get("dolly", 0) or 0)
+        except (TypeError, ValueError):
+            dolly = 0.0
+        # A long lens must stay far enough that the subject's edges remain in frame.
+        dolly = min(dolly, 1.40 - 0.55 * focal_now(fields.get("t", 0)) / 36.0)
+        loc, focus = motion_pose(location, target, dolly, fields.get("rise", 0), fields.get("pan", 0), fields.get("dip", 0))
+        cam_obj.location = loc
+        direction = focus - loc
+        if direction.length < 1e-6:
+            direction = Vector((0.0, 0.0, -1.0))
+        if abs(direction.normalized().z) > 0.98:
+            cam_obj.rotation_euler = (0.0, 0.0, 0.0) if direction.z <= 0 else (math.pi, 0.0, 0.0)
+        else:
+            cam_obj.rotation_euler = direction.to_track_quat("-Z", "Z").to_euler()
+        mark = frame_of(fields.get("t", 0), seconds, last)
+        cam_obj.keyframe_insert("location", frame=mark)
+        cam_obj.keyframe_insert("rotation_euler", frame=mark)
+    for fields in focals:
+        try:
+            mm = float(fields.get("mm", focal))
+        except (TypeError, ValueError):
+            continue
+        cam_obj.data.lens = max(18.0, min(85.0, mm))
+        cam_obj.data.keyframe_insert(data_path="lens", frame=frame_of(fields.get("t", 0), seconds, last))
+    linearize(cam_obj)
+    linearize(cam_obj.data, True)
+    for fields in moves:
+        obj = bpy.data.objects.get(fields.get("name") or "")
+        if obj is None:
+            continue
+        obj.location.x = float(fields.get("east", obj.location.x))
+        obj.location.y = float(fields.get("north", obj.location.y))
+        obj.keyframe_insert("location", frame=frame_of(fields.get("t", 0), seconds, last))
+        linearize(obj)
+    scene.render.filepath = os.path.join(OUT, "frame_")
+    bpy.ops.render.render(animation=True)
+else:
+    for name, location, target, hidden in posts:
+        for item in hidden:
+            set_hidden(item, True)
+        scene.camera = camera(name, location, target)
+        scene.render.filepath = os.path.join(OUT, name + ".png")
+        bpy.ops.render.render(write_still=True)
+        for item in hidden:
+            set_hidden(item, False)
 """
 
 
@@ -549,11 +748,54 @@ def orientation_lines(cell: Image.Image) -> Image.Image:
     return out.convert("RGB")
 
 
-def render_white_model(script: str) -> bytes:
-    """Render the model's mass() script to one 16:9 orientation sheet."""
+def _encode_line_video(folder: str, fps: int) -> bytes:
+    import glob
+
+    import imageio_ffmpeg
+
+    frames = sorted(glob.glob(os.path.join(folder, "frame_*.png")))
+    if not frames:
+        raise LayoutRenderError("白模动画没有画面。")
+    lined = os.path.join(folder, "lined")
+    os.makedirs(lined, exist_ok=True)
+    for index, path in enumerate(frames, start=1):
+        orientation_lines(Image.open(path).convert("RGB")).save(os.path.join(lined, f"frame_{index:04d}.png"))
+    out = os.path.join(folder, "anim.mp4")
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    completed = subprocess.run(
+        [
+            exe, "-y", "-framerate", str(max(4, int(fps or 8))),
+            "-i", os.path.join(lined, "frame_%04d.png"),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            out,
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0 or not os.path.isfile(out):
+        tail = ((completed.stderr or b"")).decode("utf-8", "replace")[-300:]
+        raise LayoutRenderError(tail or "白模动画没有合成。")
+    with open(out, "rb") as handle:
+        return handle.read()
+
+
+def render_white_model(script: str, view: str = "", motion: str = "") -> bytes:
+    """Render the model's mass() script.
+
+    An empty view is one overhead frame of the interior, ceiling omitted.
+    north, east, south, or west is one 16:9 frame looking that way.
+    Motion renders that view as a white-model clip.
+    """
+    chosen = str(view or "").strip().lower()
+    clip = str(motion or "").strip()
+    if clip and chosen not in {"north", "east", "south", "west"}:
+        raise LayoutRenderError("没有这一面的机位")
+    if chosen and chosen not in {"north", "east", "south", "west"}:
+        raise LayoutRenderError("没有这一面的机位")
     exe = blender_executable()
     payload = base64.b64encode(str(script or "").encode("utf-8")).decode("ascii")
-    body = _BLENDER_TEMPLATE.format(script_b64=payload)
+    motion_b64 = base64.b64encode(clip.encode("utf-8")).decode("ascii")
+    body = _BLENDER_TEMPLATE.format(script_b64=payload, view=chosen, motion_b64=motion_b64)
     with tempfile.TemporaryDirectory(prefix="aistory-clay-") as folder:
         script_path = os.path.join(folder, "white_model.py")
         with open(script_path, "w", encoding="utf-8") as handle:
@@ -562,25 +804,33 @@ def render_white_model(script: str) -> bytes:
             completed = subprocess.run(
                 [exe, "--background", "--python", script_path, "--", folder],
                 capture_output=True,
-                timeout=180,
+                timeout=420 if clip else 180,
                 check=False,
                 env=blender_process_env(exe),
             )
         except subprocess.TimeoutExpired as exc:
             raise LayoutRenderError("白模渲染超时。") from exc
-        missing = [name for name in ("north", "east", "south", "west") if not os.path.isfile(os.path.join(folder, name + ".png"))]
-        if completed.returncode != 0 or missing:
+        if clip:
+            if completed.returncode != 0:
+                log = ((completed.stderr or b"") + b"\n" + (completed.stdout or b"")).decode("utf-8", "replace")
+                tail = " ".join(line.strip() for line in log.splitlines() if line.strip())[-400:]
+                raise LayoutRenderError(tail or "白模动画渲染失败。")
+            fps = 8
+            for line in clip.splitlines():
+                if line.strip().upper().startswith("FPS"):
+                    try:
+                        fps = int(float(line.split("=", 1)[1]))
+                    except ValueError:
+                        fps = 8
+            return _encode_line_video(folder, fps)
+        name = chosen or "panorama"
+        image_path = os.path.join(folder, name + ".png")
+        if completed.returncode != 0 or not os.path.isfile(image_path):
             log = ((completed.stderr or b"") + b"\n" + (completed.stdout or b"")).decode("utf-8", "replace")
             tail = " ".join(line.strip() for line in log.splitlines() if line.strip())[-400:]
             raise LayoutRenderError(tail or "白模渲染失败。")
-        sheet = Image.new("RGB", _SHEET, (255, 255, 255))
-        for name, (left, top) in zip(("north", "east", "south", "west"), ((0, 0), (_CELL[0], 0), (0, _CELL[1]), (_CELL[0], _CELL[1]))):
-            cell = orientation_lines(Image.open(os.path.join(folder, name + ".png")).convert("RGB").resize(_CELL))
-            sheet.paste(cell, (left, top))
-        draw = ImageDraw.Draw(sheet)
-        draw.line((_CELL[0], 0, _CELL[0], _SHEET[1]), fill=(0, 0, 0), width=2)
-        draw.line((0, _CELL[1], _SHEET[0], _CELL[1]), fill=(0, 0, 0), width=2)
-        return _png_bytes(sheet)
+        frame = orientation_lines(Image.open(image_path).convert("RGB"))
+        return _png_bytes(frame)
 
 
 def _png_bytes(image: Image.Image) -> bytes:

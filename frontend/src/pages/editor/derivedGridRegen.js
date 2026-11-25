@@ -1024,12 +1024,70 @@ export function quadImagePrompt(text) {
         .join('\n\n');
 }
 
-export const WHITE_MODEL_QUAD_NOTE = '朝向参考：第一张参考图只锁定每一格里哪一面朝向镜头。左上望北，右上望东，左下望南，右下望西。格子分界与这张线框重合，正中十字仍在画面正中，四格一样大。台、床、柜、门在本格是宽面朝镜头、窄面朝镜头、侧面还是背面，门在哪一面墙上、开着还是关着，都照这张线框。朝向边上的短划只标这一面，成图不画这道短划。颜色、材质、纹样、光线和光比按后面的文字。不把线框的白底、黑线和没有明暗的表面画进成图。文字里点名、线框上没有的枕、杯、盏按文字补上。';
+export const WHITE_MODEL_QUAD_NOTE = '朝向参考：第一张参考图是这一处的白模全景，一张单图，不是四宫。它只锁定每一具哪一面朝哪。台、床、柜、门的长边、短边、哪一面朝外，门在哪一面墙上、开着还是关着，都照这张全景。成图仍按后面的文字画成四宫，不把这张全景原样画成一张。朝向边上的短划只标这一面，成图不画这道短划。颜色、材质、纹样、光线和光比按后面的文字。不把白底、黑线和没有明暗的表面画进成图。文字里点名、全景上没有的枕、杯、盏按文字补上。';
 
-const WHITE_MODEL_NOTE_RE = /^(?:弱参考：|朝向参考：)?第一张参考图(?:是同一处的白模|只锁定每一格里哪一面朝向镜头)[\s\S]*?(?=\n\n|$)/;
+const WHITE_MODEL_NOTE_RE = /^(?:弱参考：|朝向参考：)?第一张参考图(?:是同一处的白模|是这一处的白模全景|只锁定每一格里哪一面朝向镜头)[\s\S]*?(?=\n\n|$)/;
 
 export function whiteModelReferenceUrl(entity) {
     return String(readAttrs(entity).layout_image_url || '').trim();
+}
+
+function environmentNamed(entities, name) {
+    const wanted = normName(headEnvironmentName(name));
+    if (!wanted) return null;
+    return (Array.isArray(entities) ? entities : []).find((row) => {
+        if (!row || !isMainEnvironmentEntity(row) || isDerivedMainEnvironmentEntity(row)) return false;
+        return [row.name, row.name_en].some((item) => normName(headEnvironmentName(item)) === wanted);
+    }) || null;
+}
+
+function whiteModelHolder(entity, entities) {
+    if (whiteModelReferenceUrl(entity)) return entity;
+    if (!isDerivedMainEnvironmentEntity(entity)) return null;
+    const source = environmentNamed(entities, derivedMainRegenHint(entity, entities)?.source);
+    return source && whiteModelReferenceUrl(source) ? source : null;
+}
+
+/**
+ * White-model sheet used as the facing reference for a consistency check.
+ * A four-grid asset compares the whole sheet. A single cell names which quadrant.
+ */
+export function consistencyWhiteModel(entity, entities) {
+    if (!isEnvironmentEntity(entity)) return null;
+    const list = Array.isArray(entities) ? entities : [];
+    const singleCell = usesCroppedCellReference(entity);
+    if (!singleCell) {
+        const holder = whiteModelHolder(entity, list);
+        const url = whiteModelReferenceUrl(holder);
+        return url ? { url, scope: 'quad', position: '' } : null;
+    }
+    const plan = planDerivedCellReference(entity, list);
+    const owner = plan?.mainEntity && whiteModelHolder(plan.mainEntity, list);
+    const url = whiteModelReferenceUrl(owner);
+    if (!url) return null;
+    return {
+        url,
+        scope: 'sheet',
+        position: String(plan?.position || '').trim(),
+    };
+}
+
+export function whiteModelEditLead(whiteModel) {
+    const scope = String(whiteModel?.scope || '').trim();
+    if (scope === 'sheet') {
+        const position = String(whiteModel?.position || '').trim();
+        const cell = position ? `${position}格` : '对应的那一格';
+        return `第一张是要改的原图，是已经裁出的${cell}。第二张是这一处的白模全景，一张单图，不是四宫。只按全景里这一具的主体朝向修改第一张。长短边等朝向与白模不一致的，与白模保持一致。长边朝哪、短边朝哪、宽面朝哪、窄面朝哪，都跟这张全景。不要把另外三格画回来。白模的白底、黑线和没有明暗的表面不画进成图。颜色、材质、纹样、光线仍按原图。`;
+    }
+    return '第一张是要改的原图。第二张是同一处的白模全景，一张单图，不是四宫。主体朝向按这张全景里每一具的朝向修改第一张对应格。长短边等朝向与白模不一致的，与白模保持一致。长边朝哪、短边朝哪、宽面朝哪、窄面朝哪，都跟这张全景。白模的白底、黑线和没有明暗的表面不画进成图。颜色、材质、纹样、光线仍按原图。';
+}
+
+export function withWhiteModelEditInstruction(instruction, whiteModel) {
+    const text = String(instruction || '').trim();
+    const url = String(whiteModel?.url || '').trim();
+    if (!text || !url) return text;
+    if (text.includes('第二张是') && text.includes('白模')) return text;
+    return `${whiteModelEditLead(whiteModel)}\n${text}`;
 }
 
 export function applyWhiteModelQuadReference(prompt, refs, entity) {

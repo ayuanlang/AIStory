@@ -916,3 +916,77 @@ def delete_shot(
     db.commit()
     return {"ok": True, "batch_id": batch_id}
 
+
+@router.post("/shots/{shot_id}/white-model")
+async def generate_shot_white_model_route(
+    shot_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.db_session_utils import _release_db_connection
+    from app.services.scene_no_utils import _canonicalize_scene_no, _scene_no_lookup_keys
+    from app.services.script_analysis_flow.analyze_scene_stages import (
+        load_scene_subskill_results_map,
+        lookup_persisted_scene_subskill_steps,
+    )
+    from app.services.script_analysis_flow.environment_layout import shot_story_prompt
+    from app.services.script_analysis_flow.environment_layout_job import generate_shot_white_model
+    from app.services.shot_markdown import extract_merged_beat_ids
+
+    shot = db.query(Shot).filter(Shot.id == shot_id, _active_shot_clause()).first()
+    if not shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+    _require_project_access(db, shot.project_id, current_user)
+    scene = db.query(Scene).filter(Scene.id == shot.scene_id, _active_scene_clause()).first() if shot.scene_id else None
+    if scene is None:
+        raise HTTPException(status_code=400, detail="这一镜没有场次")
+    episode_id = int(shot.episode_id or scene.episode_id or 0)
+    result_map = load_scene_subskill_results_map(db, episode_id)
+    framing = ""
+    keys = _scene_no_lookup_keys(scene.scene_no, scene_id=scene.scene_no)
+    canon = _canonicalize_scene_no(scene.scene_no, scene_id=scene.scene_no)
+    for key in keys:
+        steps = lookup_persisted_scene_subskill_steps(result_map, key)
+        framing = str(steps.get("framing") or "").strip()
+        if framing:
+            break
+    if not framing and canon and isinstance(result_map, dict):
+        for map_key, value in result_map.items():
+            if not isinstance(value, dict):
+                continue
+            if _canonicalize_scene_no(map_key, scene_id=map_key) != canon:
+                continue
+            framing = str(value.get("framing") or "").strip()
+            if framing:
+                break
+    if not framing:
+        raise HTTPException(status_code=400, detail="这一场还没有现场编排成稿")
+    beat_ids = extract_merged_beat_ids(str(shot.shot_logic_cn or ""))
+    prompt = shot_story_prompt(shot.technical_notes, shot.video_content, shot.shot_logic_cn)
+    if not prompt:
+        raise HTTPException(status_code=400, detail="这一镜没有分镜提示词")
+    hint = " ".join(
+        str(part or "")
+        for part in (scene.environment_name, shot.associated_entities, shot.shot_logic_cn, shot.video_content)
+    )
+    project_id = int(shot.project_id or 0)
+    user_id = int(current_user.id or 0)
+    username = str(getattr(current_user, "username", "") or "")
+    duration = str(shot.duration or "")
+    shot_id_value = int(shot_id)
+    _release_db_connection(db, "shot_white_model")
+    try:
+        return await generate_shot_white_model(
+            project_id=project_id,
+            shot_id=shot_id_value,
+            user_id=user_id,
+            username=username,
+            framing_text=framing,
+            beat_ids=beat_ids,
+            hint=hint,
+            prompt=prompt,
+            duration=duration,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+

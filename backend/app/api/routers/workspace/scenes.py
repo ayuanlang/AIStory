@@ -18,6 +18,7 @@ from app.schemas.scene import (  # noqa: E402,F401
     ScenePurgeRequest,
     SceneRegenerateRequest,
     SceneScoreGenerateRequest,
+    SceneWhiteModelRequest,
 )
 
 
@@ -1043,4 +1044,50 @@ async def generate_episode_scene_score(
         function_name=body.function_name,
         prompt_only=bool(body.prompt_only),
     )
+
+
+@router.post("/episodes/{episode_id}/scene-white-model")
+async def generate_episode_scene_white_model(
+    episode_id: int,
+    body: SceneWhiteModelRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.db_session_utils import _release_db_connection
+    from app.services.scene_subskill_pipeline_runner import _load_scene_pipeline_rows
+    from app.services.script_analysis_flow.analyze_scene_stages import load_scene_subskill_results_map
+    from app.services.script_analysis_flow.environment_layout_job import (
+        framing_text_for_scene,
+        generate_scene_white_model,
+    )
+
+    episode = db.query(Episode).filter(Episode.id == episode_id, _active_episode_clause()).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    scene_id = str(body.scene_marker or "").strip()
+    if not scene_id:
+        raise HTTPException(status_code=400, detail="没有场次")
+    framing = framing_text_for_scene(
+        load_scene_subskill_results_map(db, episode_id),
+        scene_id,
+        _load_scene_pipeline_rows(db, project_id=int(episode.project_id or 0), episode_id=int(episode_id)),
+    )
+    if not framing:
+        raise HTTPException(status_code=400, detail="现场编排还没有成稿")
+    project_id = int(episode.project_id or 0)
+    user_id = int(current_user.id or 0)
+    username = str(getattr(current_user, "username", "") or "")
+    _release_db_connection(db, "scene_white_model")
+    try:
+        return await generate_scene_white_model(
+            project_id=project_id,
+            episode_id=int(episode_id),
+            scene_id=scene_id,
+            user_id=user_id,
+            username=username,
+            framing_text=framing,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
