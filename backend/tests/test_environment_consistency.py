@@ -310,6 +310,8 @@ def test_consistency_prompt_checks_count_facing_and_position():
     assert "左上是0度格望北" in system
     assert "左上格、左下格、右上格、右下格" in system
     assert "image_edit_instruction" in system
+    assert "按已经给出的文字继续核对" in system
+    assert "不要因为图打不开就写 status=无法核对" in system
     assert "改图指令" in system
     assert "只改这一格里点名的这一处" in system
     assert "不要重画整张四宫" in system
@@ -1327,15 +1329,18 @@ def test_unreadable_reference_stops_before_prompt_or_image_edit():
         main,
         "",
         {
-            "status": "无法核对",
+            "status": "需要修改",
             "consistent": False,
-            "summary": "参考图下载失败。",
-            "revised_prompt": "不要写进衍生提示词。",
+            "summary": "参考图下载失败。文字里这一格和开篇不一致。",
+            "revised_prompt": "台在画面后方。长边从画面左铺到画面右。",
+            "image_edit_instruction": "改这一张图里的台。",
         },
     )
-    assert declared["halt"] is True
-    assert declared["writes"] == []
+    assert declared.get("halt") is not True
+    assert declared.get("status") != "无法核对"
     assert declared["image_edit_instruction"] is None
+    written = next(item["value"] for item in declared["writes"] if item["field"] == "generation_prompt_cn")
+    assert "台在画面后方" in written
 
 
 def test_incomplete_verdict_without_changes_stops():
@@ -1355,6 +1360,31 @@ def test_incomplete_verdict_without_changes_stops():
     assert plan["status"] == "无法核对"
     assert plan["halt"] is True
     assert plan["writes"] == []
+
+
+def test_unreadable_image_with_text_match_does_not_fail():
+    derived = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 90},
+    )
+    main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
+    plan = plan_consistency_writes(
+        derived,
+        main,
+        "",
+        {
+            "status": "完全匹配",
+            "consistent": True,
+            "summary": "两张参考图均未能正常打开。开篇和这一格正文对上了，这次只核对了文字。",
+            "image_edit_instruction": None,
+        },
+    )
+    assert plan.get("halt") is not True
+    assert plan["image_edit_instruction"] is None
+    filled = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "台在画面侧面" in filled
 
 
 def test_explicit_match_still_fills_an_empty_cell_prompt():

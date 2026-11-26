@@ -1504,11 +1504,33 @@ async def execute_analyze_scene(
                 )
 
         if is_environment_quad_stage:
+            from app.services.script_analysis_flow.environment_layout_job import (
+                prepare_quad_facing_locks,
+            )
             from app.services.script_analysis_flow.environment_quad_input import (
                 crop_quad_skill_input,
             )
 
+            quad_project_id = int(getattr(request, "project_id", 0) or 0)
+            quad_episode_id = int(getattr(request, "episode_id", 0) or 0)
+            if quad_project_id <= 0 and request_episode is not None:
+                quad_project_id = int(getattr(request_episode, "project_id", 0) or 0)
+            facing_locks = await prepare_quad_facing_locks(
+                db,
+                project_id=quad_project_id,
+                episode_id=quad_episode_id,
+                user_id=int(getattr(current_user, "id", 0) or 0),
+                username=str(getattr(current_user, "username", "") or ""),
+                source_text=str(user_content or ""),
+            )
             user_content = crop_quad_skill_input(str(user_content or ""))
+            if facing_locks:
+                user_content = f"{str(user_content or '').rstrip()}\n\n{facing_locks}"
+                logger.info(
+                    "[analyze_scene] quad facing locks chars=%s episode_id=%s",
+                    len(facing_locks),
+                    quad_episode_id,
+                )
 
         if is_scoped_asset_design:
             user_content = strip_injection_section(str(user_content or ""), "待分析剧本")

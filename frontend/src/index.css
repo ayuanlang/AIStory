@@ -154,6 +154,17 @@
 .agent-chat-md strong { font-weight: 600; }
 .agent-chat-md em { font-style: italic; }
 
+.llm-log-md {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.llm-log-md pre,
+.llm-log-md pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;

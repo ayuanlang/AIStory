@@ -565,6 +565,41 @@ MOVE "CHAR:[@甲]" t=4 east=0.5 north=-0.2
     messages = animation_messages("镜头推近。", 'mass("CHAR:[@甲]", "person", east=0, north=0, along_east=0.4, along_north=0.3, height=1.7, bottom=0)', "north", 15)
     assert messages[0]["content"] == skill
     assert "CHAR:[@甲]" in messages[1]["content"]
+    assert "画面左是东减小" in messages[1]["content"]
+    east_messages = animation_messages(
+        "从画面右边走向画面左边。",
+        'mass("CHAR:[@甲]", "person", east=0, north=0, along_east=0.4, along_north=0.3, height=1.7, bottom=0)',
+        "east",
+        5,
+    )
+    assert "画面左是北增大，画面右是北减小" in east_messages[1]["content"]
+    from app.services.script_analysis_flow.environment_layout import boxes_from_layout_script, image_room_gaps
+    glued = (
+        "SECONDS = 15.00\nFPS = 8\n"
+        "CAM t=0 view=north dolly=0.70 rise=0 pan=0 dip=0\n"
+        "CAM t=15 view=north dolly=0 rise=0 pan=0 dip=0\n"
+        "FOCAL t=5 mm=50FOCAL t=10 mm=50\n"
+        "MOVE t=0CHAR:[@顾沉舟] 东=0.00 北=0.70\n"
+        "MOVE t=0PROP:[透明装甲手提箱_开态] 东=0.00 北=0.00MOVE t=10 PROP:[透明装甲手提箱_开态] 东=0.00 北=-0.30\n"
+    )
+    parsed = animation_script_from_model_text(
+        glued,
+        view="north",
+        names=["CHAR:[@顾沉舟]", "PROP:[透明装甲手提箱_开态]"],
+        seconds=15,
+    )
+    assert 'MOVE "CHAR:[@顾沉舟]" t=0.00 east=0.00 north=0.70' in parsed
+    assert 'MOVE "PROP:[透明装甲手提箱_开态]" t=10.00 east=0.00 north=-0.30' in parsed
+    assert "FOCAL t=5.00 mm=50" in parsed and "FOCAL t=10.00 mm=50" in parsed
+    people_only, _meta = boxes_from_layout_script(
+        'mass("CHAR:[@顾沉舟]", "person", east=0, north=0.7, along_east=0.45, along_north=0.25, height=1.8, bottom=0)'
+    )
+    assert "缺地面和墙" in image_room_gaps(people_only)
+    room, _meta = boxes_from_layout_script(
+        'mass("地面", "floor", east=0, north=0, along_east=8, along_north=8, height=0.04, bottom=0)\n'
+        'mass("北墙", "wall", east=0, north=4, along_east=8, along_north=0.2, height=3.2, bottom=0)'
+    )
+    assert image_room_gaps(room) == ""
     pictured = animation_messages(
         "镜头推近。",
         'mass("CHAR:[@甲]", "person", east=0, north=0, along_east=0.4, along_north=0.3, height=1.7, bottom=0)',
@@ -650,6 +685,125 @@ def test_blender_process_env_prefers_tree_lib(tmp_path):
     exe.write_text("#!/bin/sh\n", encoding="utf-8")
     env = blender_process_env(str(exe))
     assert env["LD_LIBRARY_PATH"].split(os.pathsep)[0] == str(lib)
+
+
+def test_long_lens_keeps_a_person_edge_when_they_step_closer():
+    import os
+    import subprocess
+    import tempfile
+
+    from PIL import Image
+
+    from app.services.script_analysis_flow.environment_layout_blender import (
+        LayoutRenderError,
+        blender_executable,
+        render_white_model,
+    )
+    try:
+        blender_executable()
+    except LayoutRenderError:
+        return
+    script = "\n".join([
+        "FOCAL_MM = 35",
+        'mass("地面", "floor", 0, 0, 8, 8, 0.1, 0)',
+        'mass("北墙", "wall", 0, 4, 8, 0.2, 3, 0)',
+        'mass("南墙", "wall", 0, -4, 8, 0.2, 3, 0)',
+        'mass("东墙", "wall", 4, 0, 0.2, 8, 3, 0)',
+        'mass("西墙", "wall", -4, 0, 0.2, 8, 3, 0)',
+        'mass("台", "furniture", 0, -0.5, 2.0, 1.2, 1.0, 0)',
+        'mass("CHAR:[@人]", "person", 0, 0.70, 0.45, 0.25, 1.80, 0, face="南")',
+    ])
+    motion = "\n".join([
+        "SECONDS = 2.00",
+        "FPS = 8",
+        "CAM t=0 view=north dolly=0.70 rise=0 pan=0 dip=0",
+        "CAM t=2 view=north dolly=1.00 rise=0 pan=0 dip=0",
+        "FOCAL t=0 mm=85",
+        "FOCAL t=2 mm=85",
+        'MOVE "CHAR:[@人]" t=0.00 east=0.00 north=0.70',
+        'MOVE "CHAR:[@人]" t=2.00 east=0.00 north=0.20',
+    ])
+    binary = render_white_model(script, view="north", motion=motion)
+    import imageio_ffmpeg
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "clip.mp4")
+    with open(path, "wb") as handle:
+        handle.write(binary)
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    subprocess.run([exe, "-y", "-i", path, os.path.join(folder, "f_%04d.png")], check=True, capture_output=True)
+    frames = sorted(name for name in os.listdir(folder) if name.startswith("f_"))
+    assert len(frames) >= 8
+    for name in frames:
+        gray = Image.open(os.path.join(folder, name)).convert("L")
+        dark = sum(gray.histogram()[:80])
+        assert dark > 400, name
+
+
+def test_east_two_shot_keeps_both_people_while_one_walks():
+    import os
+    import subprocess
+    import tempfile
+
+    from PIL import Image
+
+    from app.services.script_analysis_flow.environment_layout_blender import (
+        LayoutRenderError,
+        blender_executable,
+        render_white_model,
+    )
+    try:
+        blender_executable()
+    except LayoutRenderError:
+        return
+    script = "\n".join([
+        "FOCAL_MM = 35",
+        'mass("地面", "floor", 0, 0, 10, 8, 0.04, 0)',
+        'mass("南墙", "wall", 0, -4, 10, 0.25, 3.2, 0)',
+        'mass("北墙", "wall", 0, 4, 10, 0.25, 3.2, 0)',
+        'mass("东墙", "wall", 5, 0, 0.25, 8, 3.2, 0)',
+        'mass("西墙", "wall", -5, 0, 0.25, 8, 3.2, 0)',
+        'mass("中央金属台", "furniture", 0, 0, 2.6, 1.7, 0.75, 0)',
+        'mass("CHAR:[@顾沉舟]", "person", 0, 0.70, 0.45, 0.25, 1.8, 0)',
+        'mass("CHAR:[@沈清璃]", "person", 0, -1.80, 0.45, 0.25, 1.7, 0)',
+    ])
+    motion = "\n".join([
+        "SECONDS = 5.00",
+        "FPS = 8",
+        "CAM t=0 view=east dolly=0 rise=0 pan=0 dip=0",
+        "CAM t=5 view=east dolly=0 rise=0 pan=0 dip=0",
+        "FOCAL t=0 mm=24",
+        "FOCAL t=5 mm=24",
+        'MOVE "CHAR:[@顾沉舟]" t=0.00 east=0.00 north=0.70',
+        'MOVE "CHAR:[@顾沉舟]" t=5.00 east=0.00 north=0.70',
+        'MOVE "CHAR:[@沈清璃]" t=0.00 east=0.00 north=-1.80',
+        'MOVE "CHAR:[@沈清璃]" t=5.00 east=0.00 north=-0.80',
+    ])
+    binary = render_white_model(script, view="east", motion=motion)
+    import imageio_ffmpeg
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "clip.mp4")
+    with open(path, "wb") as handle:
+        handle.write(binary)
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    subprocess.run([exe, "-y", "-i", path, os.path.join(folder, "f_%04d.png")], check=True, capture_output=True)
+    frames = sorted(name for name in os.listdir(folder) if name.startswith("f_"))
+    assert len(frames) >= 16
+
+    def dark_map(name):
+        image = Image.open(os.path.join(folder, name)).convert("L")
+        width, height = image.size
+        pixels = list(image.getdata())
+        third = width // 3
+        left = sum(1 for index, value in enumerate(pixels) if value < 80 and index % width < third)
+        right = sum(1 for index, value in enumerate(pixels) if value < 80 and index % width >= width - third)
+        return left, right, pixels
+
+    start_left, start_right, start_pixels = dark_map(frames[0])
+    end_left, end_right, end_pixels = dark_map(frames[-1])
+    assert start_left > 80 and start_right > 80
+    assert end_left > 80 and end_right > 80
+    changed = sum(1 for a, b in zip(start_pixels, end_pixels) if abs(a - b) > 30)
+    assert changed > 400
 
 
 def test_blender_renders_a_four_view_sheet_from_script():

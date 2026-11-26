@@ -1,10 +1,25 @@
 import React, { useEffect } from 'react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { getUiLang, tUI } from '../lib/uiLang';
 import { useLog } from '../context/LogContext';
 import { ASSET_BASE_URL, BASE_URL } from '../config';
 import { X, Copy } from 'lucide-react';
 import { extractLogMessages } from './llmLogMessages';
+
+const LOG_MARKDOWN_PLUGINS = [remarkGfm, remarkBreaks];
+const LOG_MARKDOWN_CLASS = 'agent-chat-md llm-log-md max-w-full min-w-0 text-sm text-gray-200 break-words';
+
+function prepareLogMarkdown(value) {
+  let text = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const realBreaks = (text.match(/\n/g) || []).length;
+  const escapedBreaks = (text.match(/\\n/g) || []).length;
+  if (escapedBreaks > 0 && escapedBreaks >= realBreaks) {
+    text = text.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+  }
+  return text;
+}
 
 const MEDIA_PART_TYPES = new Set([
   'image_url', 'input_image', 'image',
@@ -297,14 +312,20 @@ export default function LlmLogViewer({ log, onClose }) {
     );
   };
 
+  const renderMarkdown = (text) => (
+    <div className={LOG_MARKDOWN_CLASS}>
+      <Markdown remarkPlugins={LOG_MARKDOWN_PLUGINS} components={markdownComponents}>{prepareLogMarkdown(text)}</Markdown>
+    </div>
+  );
+
   const renderMessageContent = (content) => {
-    if (typeof content === 'string') return <div className="prose prose-invert max-w-full min-w-0 prose-sm break-words"><Markdown components={markdownComponents}>{content}</Markdown></div>;
+    if (typeof content === 'string') return renderMarkdown(content);
     if (Array.isArray(content)) {
       return content.map((c, i) => {
-        if (!c || typeof c !== 'object') return <div key={i}>{String(c ?? '')}</div>;
+        if (!c || typeof c !== 'object') return <div key={i}>{renderMarkdown(c)}</div>;
         const type = String(c.type || '').toLowerCase();
         if (type === 'text' || type === 'input_text' || type === 'output_text' || (!type && typeof c.text === 'string')) {
-          return <div key={i} className="prose prose-invert max-w-full min-w-0 prose-sm overflow-x-hidden break-words"><Markdown components={markdownComponents}>{typeof c.text === 'string' ? c.text : ''}</Markdown></div>;
+          return <div key={i}>{renderMarkdown(typeof c.text === 'string' ? c.text : '')}</div>;
         }
         if (MEDIA_PART_TYPES.has(type) || (!type && attachmentRawUrl(c))) {
           return renderAttachment(c, i);
@@ -482,7 +503,7 @@ export default function LlmLogViewer({ log, onClose }) {
                   </button>
               </summary>
               <div className="px-4 pb-4 min-w-0 max-w-full overflow-x-hidden break-words border-t border-white/10 pt-4">
-                {typeof completionContent === 'string' && completionContent ? <div className="prose prose-invert max-w-full min-w-0 prose-sm break-words"><Markdown components={markdownComponents}>{completionContent}</Markdown></div> : (
+                {completionContent ? renderMessageContent(completionContent) : (
                    <LinkifiedPre text={displayResponseJson} className="bg-black/50 p-3 rounded-xl whitespace-pre-wrap break-all [overflow-wrap:anywhere] border border-white/5 text-xs text-gray-300" onLinkClick={debugAttachmentClick} />
                 )}
               </div>

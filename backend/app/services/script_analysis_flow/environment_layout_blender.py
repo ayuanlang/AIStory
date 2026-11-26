@@ -242,7 +242,7 @@ def camera(name, location, target):
         if abs(direction.normalized().z) > 0.98:
             obj.rotation_euler = (0.0, 0.0, 0.0) if direction.z <= 0 else (math.pi, 0.0, 0.0)
         else:
-            obj.rotation_euler = direction.to_track_quat("-Z", "Z").to_euler()
+            obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
     else:
         obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
     bpy.context.scene.collection.objects.link(obj)
@@ -605,14 +605,173 @@ if MOTION.strip():
                 chosen = mm
         return max(18.0, min(85.0, chosen))
 
-    for fields in cams or [{{"t": "0", "dolly": "0", "rise": "0", "pan": "0"}}]:
+    def box_at(item, tick):
+        east = item["east"]
+        north = item["north"]
+        keys = []
+        for fields in moves:
+            if fields.get("name") != item["name"]:
+                continue
+            try:
+                keys.append((float(fields.get("t", 0)), float(fields.get("east", east)), float(fields.get("north", north))))
+            except (TypeError, ValueError):
+                continue
+        keys.sort()
+        if not keys:
+            return east, north
+        if tick <= keys[0][0]:
+            return keys[0][1], keys[0][2]
+        if tick >= keys[-1][0]:
+            return keys[-1][1], keys[-1][2]
+        for left, right in zip(keys, keys[1:]):
+            t0, e0, n0 = left
+            t1, e1, n1 = right
+            if t0 <= tick <= t1 and t1 > t0:
+                blend = (tick - t0) / (t1 - t0)
+                return e0 + (e1 - e0) * blend, n0 + (n1 - n0) * blend
+        return east, north
+
+    def cam_fields(tick):
+        ordered = sorted(cams, key=lambda fields: float(fields.get("t", 0) or 0))
+        if not ordered:
+            return 0.0, 0.0, 0.0, 0.0
+        def pick(key, default=0.0):
+            prev = None
+            nxt = None
+            for fields in ordered:
+                mark = float(fields.get("t", 0) or 0)
+                if mark <= tick + 1e-4:
+                    prev = (mark, fields)
+                elif nxt is None:
+                    nxt = (mark, fields)
+                    break
+            if prev is None:
+                prev = (float(ordered[0].get("t", 0) or 0), ordered[0])
+            if nxt is None or nxt[0] <= prev[0]:
+                try:
+                    return float(prev[1].get(key, default) or default)
+                except (TypeError, ValueError):
+                    return default
+            try:
+                v0 = float(prev[1].get(key, default) or default)
+                v1 = float(nxt[1].get(key, default) or default)
+            except (TypeError, ValueError):
+                return default
+            return v0 + (v1 - v0) * ((tick - prev[0]) / (nxt[0] - prev[0]))
+        return pick("dolly"), pick("rise"), pick("pan"), pick("dip")
+
+    def buried_in_wall(point):
+        for item in MADE:
+            if item["kind"] != "wall" or not still_here(item):
+                continue
+            if (
+                abs(point.x - item["east"]) < item["along_east"] / 2.0 - 0.05
+                and abs(point.y - item["north"]) < item["along_north"] / 2.0 - 0.05
+                and item["bottom"] - 0.05 < point.z < item["bottom"] + item["height"] + 0.05
+            ):
+                return True
+        return False
+
+    def person_span(loc, tick):
+        flat = Vector((target[0] - location[0], target[1] - location[1], 0.0))
+        if flat.length < 1e-4:
+            flat = Vector((0.0, 1.0, 0.0))
+        else:
+            flat = flat.normalized()
+        best = None
+        for item in MADE:
+            if item["kind"] != "person" or not still_here(item):
+                continue
+            east, north = box_at(item, tick)
+            along = (east - loc.x) * flat.x + (north - loc.y) * flat.y
+            wide = item["along_east"] if abs(flat.y) >= abs(flat.x) else item["along_north"]
+            deep = item["along_north"] if abs(flat.y) >= abs(flat.x) else item["along_east"]
+            half = deep / 2.0
+            if along + half <= 0.02:
+                continue
+            near = along - half
+            if best is None or near < best[0]:
+                best = (near, wide, flat)
+        return best
+
+    def frame_group(loc, focus, tick, mm, dolly):
+        people = []
+        for item in MADE:
+            if item["kind"] != "person" or not still_here(item):
+                continue
+            east, north = box_at(item, tick)
+            people.append((east, north, item))
+        if len(people) < 2 or mm > 36.0 or float(dolly) > 0.2:
+            return loc, focus, mm
+        cx = sum(item[0] for item in people) / float(len(people))
+        cy = sum(item[1] for item in people) / float(len(people))
+        forward = Vector((focus.x - loc.x, focus.y - loc.y, 0.0))
+        if forward.length < 1e-4:
+            forward = Vector((1.0, 0.0, 0.0))
+        else:
+            forward = forward.normalized()
+        side = Vector((-forward.y, forward.x, 0.0))
+        span = 0.8
+        for east, north, item in people:
+            wide = item["along_north"] if abs(forward.x) >= abs(forward.y) else item["along_east"]
+            lateral = abs((east - cx) * side.x + (north - cy) * side.y) + wide / 2.0 + 0.35
+            span = max(span, lateral)
+        chosen = float(mm)
+        trial = loc
+        for _try in range(8):
+            dist = span / max((18.0 / max(chosen, 1.0)) * 0.68, 0.08)
+            dist = max(1.8, dist)
+            trial = Vector((cx, cy, loc.z)) - forward * dist
+            if not buried_in_wall(trial):
+                break
+            chosen = max(18.0, chosen - 3.0)
+        return trial, Vector((cx, cy, loc.z)), chosen
+
+    ticks = {{0.0, float(seconds)}}
+    for fields in cams:
         try:
-            dolly = float(fields.get("dolly", 0) or 0)
+            ticks.add(float(fields.get("t", 0) or 0))
         except (TypeError, ValueError):
-            dolly = 0.0
-        # A long lens must stay far enough that the subject's edges remain in frame.
-        dolly = min(dolly, 1.40 - 0.55 * focal_now(fields.get("t", 0)) / 36.0)
-        loc, focus = motion_pose(location, target, dolly, fields.get("rise", 0), fields.get("pan", 0), fields.get("dip", 0))
+            continue
+    for fields in moves:
+        try:
+            ticks.add(float(fields.get("t", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+    for fields in focals:
+        try:
+            ticks.add(float(fields.get("t", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+    for tick in sorted(ticks):
+        if tick < -1e-4 or tick > float(seconds) + 1e-4:
+            continue
+        dolly, rise, pan, dip = cam_fields(tick)
+        dolly = min(dolly, 1.40 - 0.55 * focal_now(tick) / 36.0)
+        loc, focus = motion_pose(location, target, dolly, rise, pan, dip)
+        span = person_span(loc, tick)
+        if span is not None and (float(dolly) > 0.2 or focal_now(tick) > 36.0):
+            near, wide, flat = span
+            need = max(0.45, wide * 1.35 * focal_now(tick) / 36.0)
+            if near < need:
+                delta = flat * (near - need)
+                loc = loc + delta
+                focus = focus + delta
+        loc, focus, grouped_mm = frame_group(loc, focus, tick, focal_now(tick), dolly)
+        for _step in range(24):
+            if not buried_in_wall(loc):
+                break
+            forward = Vector((focus.x - loc.x, focus.y - loc.y, 0.0))
+            if forward.length < 1e-4:
+                break
+            forward = forward.normalized()
+            loc = loc + forward * 0.12
+            focus = focus + forward * 0.12
+        mm = min(focal_now(tick), grouped_mm)
+        span = person_span(loc, tick)
+        if span is not None and span[0] > 0.2:
+            fit = span[0] * 36.0 / max(span[1] * 1.35, 0.2)
+            mm = max(18.0, min(mm, fit))
         cam_obj.location = loc
         direction = focus - loc
         if direction.length < 1e-6:
@@ -620,17 +779,12 @@ if MOTION.strip():
         if abs(direction.normalized().z) > 0.98:
             cam_obj.rotation_euler = (0.0, 0.0, 0.0) if direction.z <= 0 else (math.pi, 0.0, 0.0)
         else:
-            cam_obj.rotation_euler = direction.to_track_quat("-Z", "Z").to_euler()
-        mark = frame_of(fields.get("t", 0), seconds, last)
+            cam_obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+        mark = frame_of(tick, seconds, last)
         cam_obj.keyframe_insert("location", frame=mark)
         cam_obj.keyframe_insert("rotation_euler", frame=mark)
-    for fields in focals:
-        try:
-            mm = float(fields.get("mm", focal))
-        except (TypeError, ValueError):
-            continue
-        cam_obj.data.lens = max(18.0, min(85.0, mm))
-        cam_obj.data.keyframe_insert(data_path="lens", frame=frame_of(fields.get("t", 0), seconds, last))
+        cam_obj.data.lens = mm
+        cam_obj.data.keyframe_insert(data_path="lens", frame=mark)
     linearize(cam_obj)
     linearize(cam_obj.data, True)
     for fields in moves:

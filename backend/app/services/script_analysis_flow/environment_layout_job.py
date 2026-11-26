@@ -299,7 +299,15 @@ def _upload_layout_bytes(binary: bytes, user_id: int, suffix: str = "png", conte
     return f"{external}{relative}" if external else relative
 
 
-def _store_layout(db: Any, entity: Any, binary: bytes, boxes: Sequence[Any], user_id: int) -> str:
+def _store_layout(
+    db: Any,
+    entity: Any,
+    binary: bytes,
+    boxes: Sequence[Any],
+    user_id: int,
+    script: str = "",
+    opening_digest: str = "",
+) -> str:
     from sqlalchemy.orm.attributes import flag_modified
 
     from app.services.script_analysis_flow.environment_layout import layout_box_records
@@ -308,6 +316,10 @@ def _store_layout(db: Any, entity: Any, binary: bytes, boxes: Sequence[Any], use
     attrs = dict(entity.custom_attributes) if isinstance(entity.custom_attributes, dict) else {}
     attrs["layout_image_url"] = url
     attrs["layout_boxes"] = layout_box_records(boxes)
+    if str(script or "").strip():
+        attrs["layout_script"] = str(script).strip()
+    if str(opening_digest or "").strip():
+        attrs["layout_opening_digest"] = str(opening_digest).strip()
     entity.custom_attributes = attrs
     flag_modified(entity, "custom_attributes")
     db.commit()
@@ -487,6 +499,12 @@ async def _render_group(
                 if gap:
                     raise LayoutError(gap)
                 script_text = apply_facing(script_text, room_text)
+            elif view_picture_list():
+                from app.services.script_analysis_flow.environment_layout import image_room_gaps
+
+                gap = image_room_gaps(layout_boxes)
+                if gap:
+                    raise LayoutError(gap)
             script_text = merge_occupant_script(script_text, occupants)
             layout_boxes, _meta = boxes_from_layout_script(script_text)
             return script_text, layout_boxes
@@ -503,6 +521,8 @@ async def _render_group(
                     response = retry
                 script, boxes = read_layout(str((retry or {}).get("content", "") or ""))
             except LayoutError:
+                if view_picture_list():
+                    raise
                 script = _fallback_script(fixtures, occupants)
                 if not script:
                     raise
@@ -608,7 +628,17 @@ async def _render_group(
                 _cancel_reservation_quietly(db, reservation_tx_id, "entity missing")
                 return {"name": name, "entity_id": int(entity_id), "image_url": "", "error": "环境不在库里"}
             binary = frames[0][1]
-            url = _store_layout(db, entity, binary, boxes, int(user_id))
+            from app.services.script_analysis_flow.environment_quad_facing import opening_digest
+
+            url = _store_layout(
+                db,
+                entity,
+                binary,
+                boxes,
+                int(user_id),
+                script=script,
+                opening_digest=opening_digest(opening),
+            )
             sheets = []
         fresh_user = db.query(User).filter(User.id == int(user_id)).first()
         if fresh_user is not None:
@@ -637,6 +667,7 @@ async def _render_group(
             "image_url": url,
             "box_count": len(boxes),
             "sheets": sheets,
+            "script": script,
             "error": "",
         }
     except Exception as exc:
@@ -955,3 +986,103 @@ async def generate_shot_white_model(
         "errors": errors,
         "technical_notes": stored_notes,
     }
+
+
+def _main_environment_entity(db: Any, project_id: int, episode_id: int, name: str) -> Any:
+    from app.models.all_models import Entity
+    from app.services.script_analysis_flow.environment_consistency import (
+        is_derived_environment_entity,
+        is_environment_entity,
+    )
+    from app.services.script_analysis_flow.environment_reuse import normalize_environment_name
+    from app.services.soft_delete import _active_entity_clause
+
+    target = normalize_environment_name(name)
+    if not target or int(project_id) <= 0 or int(episode_id) <= 0:
+        return None
+    rows = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == int(project_id),
+            Entity.episode_id == int(episode_id),
+            _active_entity_clause(),
+        )
+        .all()
+    )
+    for row in rows:
+        if not is_environment_entity(row) or is_derived_environment_entity(row):
+            continue
+        if normalize_environment_name(getattr(row, "name", "")) == target:
+            return row
+    return None
+
+
+async def prepare_quad_facing_locks(
+    db: Any,
+    *,
+    project_id: int,
+    episode_id: int,
+    user_id: int,
+    username: str,
+    source_text: str,
+) -> str:
+    """Render each main environment's white model, then return the facing locks.
+
+    A stored script is reused when it was built from this same opening.
+    Characters and props are not included.
+    """
+    from app.services.script_analysis_flow.derived_env_ingest import (
+        extract_named_design_openings,
+        list_main_environment_draft_names,
+    )
+    from app.services.script_analysis_flow.environment_layout import LayoutError
+    from app.services.script_analysis_flow.environment_quad_facing import (
+        opening_digest,
+        quad_facing_lock,
+    )
+
+    names = list_main_environment_draft_names(source_text)
+    if not names:
+        return ""
+    openings = extract_named_design_openings(source_text)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+    blocks: List[str] = []
+    for name in names:
+        opening = str(openings.get(name.lower()) or "").strip()
+        if not opening:
+            raise LayoutError(f"{name}：没有开篇，不能先出白模。")
+        entity = _main_environment_entity(db, int(project_id), int(episode_id), name)
+        if entity is None:
+            raise LayoutError(f"{name}：没有这块主环境，不能先出白模。")
+        entity_id = int(getattr(entity, "id", 0) or 0)
+        attrs = dict(entity.custom_attributes) if isinstance(entity.custom_attributes, dict) else {}
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        digest = opening_digest(opening)
+        script = str(attrs.get("layout_script") or "").strip()
+        if str(attrs.get("layout_opening_digest") or "") != digest or not script:
+            logger.info("[quad_white_model] render name=%s entity=%s", name, entity_id)
+            rendered = await _render_group(
+                project_id=int(project_id),
+                user_id=int(user_id),
+                username=str(username or ""),
+                name=name,
+                opening=opening,
+                occupants="",
+                fixtures=[],
+                entity_id=entity_id,
+            )
+            error = str((rendered or {}).get("error") or "").strip()
+            script = str((rendered or {}).get("script") or "").strip()
+            if error or not script:
+                raise LayoutError(f"{name}：白模没有生成，四宫提示词先不写。{error}")
+        lock = quad_facing_lock(name, script)
+        if lock:
+            blocks.append(lock)
+    db.expire_all()
+    return "\n\n".join(blocks)

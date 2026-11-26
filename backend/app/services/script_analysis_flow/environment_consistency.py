@@ -342,9 +342,11 @@ def _blank_to_none(value: Any) -> Optional[str]:
 
 _CHECK_STATUS_RULE = (
     "status 只写无法核对、完全匹配、需要修改里的一个。\n"
-    "参考图打不开、下载失败、看不清、这次没法完成核对时，status=无法核对，consistent 为 false，"
-    "summary 写明原因，revised_cell、revised_prompt、revised_main_prompt、image_edit_instruction 都为 null。"
-    "不要写成画面不一致，也不要写改图指令。\n"
+    "参考图或白模打不开、下载失败、看不清时，按已经给出的文字继续核对：开篇、宫格正文、衍生提示词、Delta。\n"
+    "文字对上则 status=完全匹配。文字要改则 status=需要修改，把改后的正文写入 revised_cell、revised_prompt 或 revised_main_prompt。\n"
+    "图没有打开时，image_edit_instruction 为 null。summary 写明图没有打开，这次只核对了文字。\n"
+    "不要因为图打不开就写 status=无法核对，也不要直接返回失败。\n"
+    "只有开篇和宫格这些文字也缺失、没法对照时，才写 status=无法核对，consistent 为 false，改写和改图指令都为 null。\n"
     "正文和参考图都对上时，status=完全匹配。\n"
     "要改正文或要改图时，status=需要修改，并在对应字段写明改什么。\n"
 )
@@ -380,17 +382,34 @@ def _payload_has_change(payload: Dict[str, Any]) -> bool:
     return any(_blank_to_none(payload.get(key)) for key in _CHANGE_FIELDS)
 
 
+def _summary_says_image_unreadable(summary: str) -> bool:
+    text = str(summary or "")
+    return any(marker in text for marker in _UNREADABLE_IMAGE_MARKERS)
+
+
+def _text_only_when_image_unreadable(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop a picture edit when the reference never opened. Keep the text verdict."""
+    if not _summary_says_image_unreadable(str(payload.get("summary") or "")):
+        return payload
+    copied = dict(payload)
+    copied["image_edit_instruction"] = None
+    return copied
+
+
 def consistency_verdict(payload: Dict[str, Any]) -> str:
     """Closed status the program uses to stop or continue.
 
     无法核对 stops the flow. 完全匹配 and 需要修改 are explicit outcomes.
-    An unreadable image stays 无法核对 even if the model also wrote an edit.
+    An unreadable image does not cancel a text verdict. A picture edit written
+    without seeing the image is removed before this judgment.
     """
     summary = str(payload.get("summary") or "")
     declared = str(payload.get("status") or "").strip()
-    if any(marker in summary for marker in _UNREADABLE_IMAGE_MARKERS) or declared in _STATUS_HALT:
-        return "无法核对"
     has_change = _payload_has_change(payload)
+    image_blocked = _summary_says_image_unreadable(summary)
+    text_judged = bool(payload.get("consistent")) or has_change or declared in _STATUS_MATCH
+    if declared in _STATUS_HALT and not (image_blocked and text_judged):
+        return "无法核对"
     if declared in _STATUS_MATCH and not has_change:
         return "完全匹配"
     if declared in _STATUS_EDIT or has_change:
@@ -1538,6 +1557,7 @@ def plan_consistency_writes(
     that derived asset's prompt and does not write the main environment.
     """
     kind = classify_checked_prompt(entity, checked_prompt)
+    payload = _text_only_when_image_unreadable(payload)
     if consistency_verdict(payload) == "无法核对":
         return _stopped_check_plan(kind, payload)
     if kind == "cell":

@@ -1105,6 +1105,14 @@ def layout_script_gaps(opening: str, boxes: Sequence[LayoutBox]) -> str:
     return "缺这些具：" + "；".join(missing) + "。墙皮和门各写一行。FOCAL_MM 单独一行。"
 
 
+def image_room_gaps(boxes: Sequence[LayoutBox]) -> str:
+    """An image-only room that copies only people and props is not a room."""
+    kinds = {box.kind for box in boxes}
+    if "floor" in kinds and "wall" in kinds:
+        return ""
+    return "缺地面和墙。按图把地面、墙和看得见的台各写一行。角色和道具照抄，不能只写人和道具。"
+
+
 def mass_names(script: str) -> List[str]:
     return re.findall(r'mass\(\s*"([^"]+)"', str(script or ""))
 
@@ -1171,15 +1179,13 @@ def fallback_motion(view: str, seconds: float) -> str:
 
 def _toward_lens(view: str) -> str:
     face = str(view or "").strip().lower()
-    if face == "north":
-        return "靠近镜头是北减小，远离镜头是北增大。"
-    if face == "south":
-        return "靠近镜头是北增大，远离镜头是北减小。"
-    if face == "east":
-        return "靠近镜头是东减小，远离镜头是东增大。"
-    if face == "west":
-        return "靠近镜头是东增大，远离镜头是东减小。"
-    return ""
+    lines = {
+        "north": "靠近镜头是北减小，远离镜头是北增大。画面左是东减小，画面右是东增大。",
+        "south": "靠近镜头是北增大，远离镜头是北减小。画面左是东增大，画面右是东减小。",
+        "east": "靠近镜头是东减小，远离镜头是东增大。画面左是北增大，画面右是北减小。",
+        "west": "靠近镜头是东增大，远离镜头是东减小。画面左是北减小，画面右是北增大。",
+    }
+    return lines.get(face, "")
 
 
 def mass_motion_brief(script: str) -> str:
@@ -1257,14 +1263,21 @@ def animation_messages(
 
 
 def _animation_lines(text: str) -> List[str]:
-    """One key per line. A reply pasted as a single line is split on the keys."""
+    """One key per line. Keys glued onto the previous value are split apart."""
     cleaned = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL | re.IGNORECASE)
     cleaned = re.sub(r"```(?:\w+)?", "", cleaned).strip()
-    rows = [line.strip() for line in cleaned.splitlines() if line.strip()]
-    if len(rows) >= 3:
-        return rows
-    blob = " ".join(rows)
-    return [part.strip() for part in re.split(r"\s+(?=(?:SECONDS|FPS|CAM|FOCAL|MOVE)\b)", blob) if part.strip()]
+    rows: List[str] = []
+    for line in cleaned.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [
+            part.strip()
+            for part in re.split(r"(?=(?:SECONDS|FPS|CAM|FOCAL|MOVE)\b)", line)
+            if part.strip()
+        ]
+        rows.extend(parts)
+    return rows
 
 
 def _move_from_line(line: str) -> Optional[Tuple[str, float, float, float]]:
@@ -1276,7 +1289,7 @@ def _move_from_line(line: str) -> Optional[Tuple[str, float, float, float]]:
     if quoted:
         return quoted.group(1), float(quoted.group(2)), float(quoted.group(3)), float(quoted.group(4))
     plain = re.match(
-        r"^MOVE\s+t=(-?\d+(?:\.\d+)?)\s+(.+?)\s+(?:东|east)=(-?\d+(?:\.\d+)?)\s+(?:北|north)=(-?\d+(?:\.\d+)?)\s*$",
+        r"^MOVE\s+t=(-?\d+(?:\.\d+)?)\s*(.+?)\s+(?:东|east)=(-?\d+(?:\.\d+)?)\s+(?:北|north)=(-?\d+(?:\.\d+)?)\s*$",
         line,
         flags=re.I,
     )
@@ -1386,6 +1399,7 @@ def layout_messages(
             "墙、门、窗、柜、台、地面、天花只按图里看得见的写。图里没有的不写。\n"
             "朝向按图里哪一面朝镜头。开闭按图里是开着还是关着。\n"
             "米按图里的相对大小估计，围成这一间。FOCAL_MM 没有就写 35。\n"
+            "地面、墙和看得见的台各写一行。只写角色和道具、不写地面和墙，这一稿不交。\n"
             "系统提示里关于开篇的句子，这一次不执行。\n"
         )
     elif text:
@@ -1828,6 +1842,24 @@ def apply_facing(script: str, opening: str) -> str:
             rest += ", face=" + json.dumps(face, ensure_ascii=False)
         lines.append(f"mass({found.group('name')}, {found.group('kind')}{rest})")
     return "\n".join(lines)
+
+
+def layout_mass_fields(script: str) -> List[Dict[str, Any]]:
+    """One dict per mass() line, including face and state."""
+    rows: List[Dict[str, Any]] = []
+    for line in str(script or "").splitlines():
+        found = _MASS_CALL.match(line.strip())
+        if found is None:
+            continue
+        name = _unquote(found.group("name")).strip()
+        kind = _KIND_WORDS.get(_unquote(found.group("kind")).strip(), "furniture")
+        values: Dict[str, Any] = {"name": name, "kind": kind}
+        for key, raw in _MASS_ARG.findall(found.group("rest") or ""):
+            if key not in _MASS_KEYS:
+                continue
+            values[key] = _unquote(raw) if str(raw)[:1] in {"'", '"'} else float(raw)
+        rows.append(values)
+    return rows
 
 
 def layout_box_records(boxes: Sequence[LayoutBox]) -> List[Dict[str, Any]]:
