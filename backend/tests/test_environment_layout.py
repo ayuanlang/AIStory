@@ -485,8 +485,11 @@ def test_scene_white_model_finds_framing_under_scene_number():
 
 def test_shot_motion_follows_the_locked_view():
     from app.services.script_analysis_flow.environment_layout import (
+        animation_messages,
         animation_script_from_model_text,
+        animation_skill_text,
         mass_motion_brief,
+        missing_occupant_moves,
         shot_anim_seconds,
         shot_story_prompt,
     )
@@ -538,6 +541,65 @@ MOVE "CHAR:[@甲]" t=4 east=0.5 north=-0.2
     )
     assert "dip=12" in dipped
     assert "t=5.00 view=north" in dipped and "dip=0" in dipped
+    skill = animation_skill_text()
+    assert "每一个 `CHAR:`" in skill
+    assert "插、拿、开、看不写 MOVE" not in skill
+    flat = (
+        "SECONDS = 15.00 FPS = 8 "
+        "CAM t=0 view=north dolly=0.70 rise=0 pan=0 dip=12 "
+        "CAM t=15 view=north dolly=0 rise=0 pan=0 dip=0 "
+        "FOCAL t=0 mm=24 FOCAL t=15 mm=85 "
+        "MOVE t=0 PROP:[最高权限令牌] 东=0.00 北=0.00 "
+        "MOVE t=5 CHAR:[@顾沉舟] 东=0.00 北=0.20 "
+        "MOVE t=5 PROP:[最高权限令牌] 东=0.00 北=-0.20"
+    )
+    kept = animation_script_from_model_text(
+        flat,
+        view="north",
+        names=["CHAR:[@顾沉舟]", "PROP:[最高权限令牌]", "重型保险台"],
+        seconds=15,
+    )
+    assert 'MOVE "CHAR:[@顾沉舟]" t=5.00 east=0.00 north=0.20' in kept
+    assert 'MOVE "PROP:[最高权限令牌]" t=5.00 east=0.00 north=-0.20' in kept
+    assert missing_occupant_moves(kept, ["CHAR:[@顾沉舟]", "PROP:[透明装甲手提箱_开态]"]) == "PROP:[透明装甲手提箱_开态]"
+    messages = animation_messages("镜头推近。", 'mass("CHAR:[@甲]", "person", east=0, north=0, along_east=0.4, along_north=0.3, height=1.7, bottom=0)', "north", 15)
+    assert messages[0]["content"] == skill
+    assert "CHAR:[@甲]" in messages[1]["content"]
+    pictured = animation_messages(
+        "镜头推近。",
+        'mass("CHAR:[@甲]", "person", east=0, north=0, along_east=0.4, along_north=0.3, height=1.7, bottom=0)',
+        "north",
+        15,
+        images=["https://example.com/north.png", "https://example.com/east.png"],
+    )
+    parts = pictured[1]["content"]
+    assert parts[0]["type"] == "text" and "衍生环境" in parts[0]["text"]
+    assert parts[1]["image_url"]["url"] == "https://example.com/north.png"
+    assert parts[2]["image_url"]["url"] == "https://example.com/east.png"
+    from app.services.script_analysis_flow.environment_layout import layout_messages
+    sheet = layout_messages("", images=["https://example.com/north.png"])
+    body = sheet[1]["content"][0]["text"]
+    assert "不要开篇" in body
+    assert "开篇原文" not in body
+    assert body.index("不要开篇") < 80
+
+
+def test_derived_view_image_uses_the_matching_cell():
+    from app.services.script_analysis_flow.environment_layout_job import _quad_cell_url
+
+    class Row:
+        custom_attributes = {
+            "quad_cell_images": {
+                "cells": {
+                    "左上": {"url": "https://cdn.example/north.png"},
+                    "右上": "https://cdn.example/east.png",
+                }
+            }
+        }
+
+    assert _quad_cell_url(Row(), 0) == "https://cdn.example/north.png"
+    assert _quad_cell_url(Row(), 90) == "https://cdn.example/east.png"
+    assert _quad_cell_url(Row(), 180) == ""
 
 
 def test_shot_white_model_uses_named_derived_views():

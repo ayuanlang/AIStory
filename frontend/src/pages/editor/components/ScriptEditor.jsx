@@ -37717,7 +37717,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         type="button"
                         onClick={() => setBeatViewerOpen(true)}
                         className="inline-flex items-center gap-2 rounded-xl border border-sky-400/30 bg-sky-500/10 px-3.5 py-2 text-sm font-bold text-sky-100 transition-colors hover:bg-sky-500/20"
-                        title={t('按场景和节拍查看文戏、武戏、现场编排、建置与入戏', 'View one beat across drama, action, floor staging, and blocking')}
+                        title={t('按场景和节拍查看文戏、武戏、物理编排、拍摄编排、建置与入戏', 'View one beat across drama, action, world layout, camera staging, and blocking')}
                     >
                         <Layers className="w-4 h-4" />
                         {t('节拍查看', 'Beat viewer')}

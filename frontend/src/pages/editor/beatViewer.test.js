@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+    BEAT_VIEWER_NODES,
     beatOptionLabel,
     buildBeatViewerScenes,
     findNodeBeat,
@@ -100,6 +101,43 @@ describe('buildBeatViewerScenes', () => {
         });
         assert.deepEqual(scenes[0].beatIds, [WHOLE_NODE_BEAT_ID]);
         assert.match(findNodeBeat(scenes[0].nodes.drama, WHOLE_NODE_BEAT_ID).body, /还没有切拍/);
+    });
+
+    it('shows physical layout and camera staging as separate nodes', () => {
+        assert.deepEqual(BEAT_VIEWER_NODES.map((node) => node.zh), [
+            '文戏增强',
+            '武戏增强',
+            '物理编排',
+            '拍摄编排',
+            '建置与入戏',
+        ]);
+        const scenes = buildBeatViewerScenes({
+            EP01_SC01: {
+                layout: '[BEAT_START:1]\n【全场调度】\n锚=门\n[BEAT_END:1]',
+                framing: '[BEAT_START:1]\n【拍摄借鉴】\n串场=某片\n[BEAT_END:1]',
+            },
+        });
+        assert.match(findNodeBeat(scenes[0].nodes.layout, '1').body, /全场调度/);
+        assert.doesNotMatch(findNodeBeat(scenes[0].nodes.layout, '1').body, /拍摄借鉴/);
+        assert.match(findNodeBeat(scenes[0].nodes.framing, '1').body, /拍摄借鉴/);
+        assert.doesNotMatch(findNodeBeat(scenes[0].nodes.framing, '1').body, /全场调度/);
+    });
+
+    it('fills a missing layout draft from the world-layout pipeline block', () => {
+        const merged = mergePipelineSceneBlocks(
+            {},
+            [{
+                node_name: 'scene_subskill_scene',
+                scene_id: 'EP01_SC01',
+                runtime_meta: {
+                    current_step: 'world_layout',
+                    scene_block: '[BEAT_START:1]\n【全场调度】\n[BEAT_END:1]',
+                },
+            }],
+        );
+        assert.match(merged.EP01_SC01.layout, /全场调度/);
+        const scenes = buildBeatViewerScenes(merged);
+        assert.match(findNodeBeat(scenes[0].nodes.layout, '1').body, /全场调度/);
     });
 
     it('fills a missing step from the pipeline block without replacing a stored draft', () => {
@@ -296,6 +334,16 @@ describe('storyboard beat trace', () => {
             { id: 2, name: '客栈大堂', type: 'environment', custom_attributes: { layout_image_url: 'https://cdn.example/panorama.png' } },
         ], null);
         assert.equal(newer[0].image_url, 'https://cdn.example/panorama.png');
+        const fromLayout = sceneWhiteModelSheets({
+            nodes: {
+                layout: {
+                    text: `【白模测算】
+环境=客栈大堂｜原点=八仙桌
+【/白模测算】`,
+                },
+            },
+        }, entities, null);
+        assert.deepEqual(fromLayout.map((item) => item.name), ['客栈大堂']);
         const fallback = sceneWhiteModelSheets({ nodes: {} }, entities, { environment_name: '客栈大堂，别处' });
         assert.deepEqual(fallback.map((item) => item.image_url), [
             'https://cdn.example/hall.png',

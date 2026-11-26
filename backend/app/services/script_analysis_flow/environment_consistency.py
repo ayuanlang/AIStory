@@ -340,6 +340,82 @@ def _blank_to_none(value: Any) -> Optional[str]:
     return text
 
 
+_CHECK_STATUS_RULE = (
+    "status 只写无法核对、完全匹配、需要修改里的一个。\n"
+    "参考图打不开、下载失败、看不清、这次没法完成核对时，status=无法核对，consistent 为 false，"
+    "summary 写明原因，revised_cell、revised_prompt、revised_main_prompt、image_edit_instruction 都为 null。"
+    "不要写成画面不一致，也不要写改图指令。\n"
+    "正文和参考图都对上时，status=完全匹配。\n"
+    "要改正文或要改图时，status=需要修改，并在对应字段写明改什么。\n"
+)
+_UNREADABLE_IMAGE_MARKERS = (
+    "未能正常打开",
+    "无法打开",
+    "打不开",
+    "未能打开",
+    "图片无法读取",
+    "无法读取图片",
+    "参考图无法读取",
+    "参考图未能打开",
+    "参考图无法打开",
+    "参考图打不开",
+    "无法下载",
+    "下载失败",
+    "无法加载图片",
+    "图片无法加载",
+    "看不到参考图",
+    "没有看到参考图",
+    "图片无效",
+    "无法获取图片",
+    "图片无法获取",
+    "参考图均未",
+)
+_STATUS_HALT = {"无法核对", "错误", "error", "unreadable", "failed"}
+_STATUS_MATCH = {"完全匹配", "一致", "match"}
+_STATUS_EDIT = {"需要修改", "已明确修改", "修改", "revise"}
+_CHANGE_FIELDS = ("revised_cell", "revised_prompt", "revised_main_prompt", "image_edit_instruction")
+
+
+def _payload_has_change(payload: Dict[str, Any]) -> bool:
+    return any(_blank_to_none(payload.get(key)) for key in _CHANGE_FIELDS)
+
+
+def consistency_verdict(payload: Dict[str, Any]) -> str:
+    """Closed status the program uses to stop or continue.
+
+    无法核对 stops the flow. 完全匹配 and 需要修改 are explicit outcomes.
+    An unreadable image stays 无法核对 even if the model also wrote an edit.
+    """
+    summary = str(payload.get("summary") or "")
+    declared = str(payload.get("status") or "").strip()
+    if any(marker in summary for marker in _UNREADABLE_IMAGE_MARKERS) or declared in _STATUS_HALT:
+        return "无法核对"
+    has_change = _payload_has_change(payload)
+    if declared in _STATUS_MATCH and not has_change:
+        return "完全匹配"
+    if declared in _STATUS_EDIT or has_change:
+        if not has_change:
+            return "无法核对"
+        return "需要修改"
+    if payload.get("consistent"):
+        return "完全匹配"
+    return "无法核对"
+
+
+def _stopped_check_plan(kind: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    summary = str(payload.get("summary") or "").strip() or "参考图无法核对，一致性检查已停止。"
+    return {
+        "consistent": False,
+        "halt": True,
+        "status": "无法核对",
+        "kind": kind,
+        "summary": summary,
+        "writes": [],
+        "updated_targets": [],
+        "image_edit_instruction": None,
+    }
+
+
 def parse_consistency_payload(text: str) -> Dict[str, Any]:
     content = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL | re.IGNORECASE).strip()
     content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
@@ -352,6 +428,7 @@ def parse_consistency_payload(text: str) -> Dict[str, Any]:
         consistent = consistent.strip().lower() in {"true", "1", "yes", "y", "是", "一致"}
     return {
         "consistent": bool(consistent),
+        "status": str(data.get("status") or "").strip(),
         "summary": str(data.get("summary") or "").strip(),
         "revised_prompt": _blank_to_none(data.get("revised_prompt")),
         "revised_main_prompt": _blank_to_none(data.get("revised_main_prompt")),
@@ -1461,6 +1538,8 @@ def plan_consistency_writes(
     that derived asset's prompt and does not write the main environment.
     """
     kind = classify_checked_prompt(entity, checked_prompt)
+    if consistency_verdict(payload) == "无法核对":
+        return _stopped_check_plan(kind, payload)
     if kind == "cell":
         return _plan_cell_consistency_writes(entity, main_entity, payload)
     if kind == "derived_main":
@@ -1830,8 +1909,9 @@ def _build_derived_main_consistency_messages(
         "要改的宫格按左上格、左下格、右上格、右下格的顺序写。左上格是0度格，左下格是180度格，右上格是90度格，右下格是270度格。每一格单独成句。\n"
         "衍生主环境自己的提示词需要改 Delta 表述时，把改后的全文写进 revised_prompt。提示词不用改则为 null。\n"
         "四格都符合被依赖主环境和 Delta 时，consistent 为 true，revised_prompt 和 image_edit_instruction 都为 null。\n"
-        "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
-        '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或衍生主环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
+        + _CHECK_STATUS_RULE
+        + "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+        '{"status": "无法核对或完全匹配或需要修改", "consistent": true或false, "summary": "一两句中文", "revised_prompt": null或衍生主环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
     )
     parts = [
         f"检查对象=衍生主环境。主体={getattr(entity, 'name', '')}。被依赖主环境={source_name or '未知'}。",
@@ -1908,8 +1988,9 @@ def _build_cell_consistency_messages(
             "revised_prompt 是写进这个衍生环境、之后用来生图的提示词。只保留这一格正文里仍然成立的句子，并写上 Delta 在这一格的可见变化。不要写切割。\n"
             "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
             "两件都相符时 consistent 为 true，revised_prompt 和 image_edit_instruction 都为 null，revised_cell 仍为 null。\n"
-            "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
-            '{"consistent": true或false, "summary": "一两句中文", "revised_cell": null, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
+            + _CHECK_STATUS_RULE
+            + "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+            '{"status": "无法核对或完全匹配或需要修改", "consistent": true或false, "summary": "一两句中文", "revised_cell": null, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
         )
     else:
         system_prompt = (
@@ -1931,8 +2012,9 @@ def _build_cell_consistency_messages(
             "开篇不改。另外三格不改。revised_main_prompt 必须为 null。\n"
             "image_edit_instruction 只改这一张单格图。不写米，不写东南西北，不写另外三格，不写不要重画整张四宫。\n"
             "两件都相符时 consistent 为 true，revised_cell、revised_prompt、image_edit_instruction 都为 null。\n"
-            "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
-            '{"consistent": true或false, "summary": "一两句中文", "revised_cell": null或这一格全文, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
+            + _CHECK_STATUS_RULE
+            + "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+            '{"status": "无法核对或完全匹配或需要修改", "consistent": true或false, "summary": "一两句中文", "revised_cell": null或这一格全文, "revised_prompt": null或衍生环境提示词, "revised_main_prompt": null, "image_edit_instruction": null或改图指令}'
         )
     parts = [
         f"检查对象=衍生环境单格。主体={getattr(entity, 'name', '')}。角度={angle if angle is not None else '未知'}。",
@@ -2076,8 +2158,9 @@ def build_consistency_messages(
         "补充点名的宫格句子，在不违背开篇时写入改后提示词。"
         "没有「用户补充」就只按开篇。"
         "补充不能新造开篇没有的主体，也不能改掉已锁的东南西北、占地、竖边。\n"
-        "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
-        '{"consistent": true或false, "summary": "一两句中文", "revised_prompt": null或改过的提示词, "revised_main_prompt": null或改过的主环境提示词, "image_edit_instruction": null或改图指令}'
+        + _CHECK_STATUS_RULE
+        + "只返回 JSON 对象，第一个字符是 {，最后一个字符是 }。不要 Markdown，不要解释。\n"
+        '{"status": "无法核对或完全匹配或需要修改", "consistent": true或false, "summary": "一两句中文", "revised_prompt": null或改过的提示词, "revised_main_prompt": null或改过的主环境提示词, "image_edit_instruction": null或改图指令}'
     )
     parts = [
         f"检查对象={kind}。主体={getattr(entity, 'name', '')}。",

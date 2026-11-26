@@ -1,10 +1,12 @@
-const NODE_KEYS = ['drama', 'combat', 'framing', 'staging'];
+const NODE_KEYS = ['drama', 'combat', 'layout', 'framing', 'staging'];
 
 const STEP_FROM_PIPELINE = {
     drama: 'drama',
     combat: 'combat',
     vfx: 'combat',
     xian: 'combat',
+    world_layout: 'layout',
+    layout: 'layout',
     derived_framing: 'framing',
     framing: 'framing',
     staging: 'staging',
@@ -17,7 +19,8 @@ const LEGACY_BEAT_RE = /^\s*[-~]\s*Beat\s+(\d+)\b/gm;
 export const BEAT_VIEWER_NODES = [
     { key: 'drama', zh: '文戏增强', en: 'Drama enhancement' },
     { key: 'combat', zh: '武戏增强', en: 'Action enhancement' },
-    { key: 'framing', zh: '现场编排', en: 'Floor staging' },
+    { key: 'layout', zh: '物理编排', en: 'World layout' },
+    { key: 'framing', zh: '拍摄编排', en: 'Camera staging' },
     { key: 'staging', zh: '建置与入戏', en: 'Blocking' },
 ];
 
@@ -167,6 +170,7 @@ const unionBeatIds = (nodes) => {
 const emptyNodes = () => ({
     drama: { text: '', beats: [] },
     combat: { text: '', beats: [] },
+    layout: { text: '', beats: [] },
     framing: { text: '', beats: [] },
     staging: { text: '', beats: [] },
 });
@@ -452,8 +456,15 @@ export const applyWhiteModelLayoutUrls = (entities, sheets) => {
 };
 
 export const sceneWhiteModelSheets = (scene, entities, workspaceScene) => {
-    const fromFraming = framingEnvironmentNames(scene?.nodes?.framing?.text);
-    const names = fromFraming.length ? fromFraming : workspaceEnvironmentNames(workspaceScene);
+    const named = [];
+    [scene?.nodes?.layout?.text, scene?.nodes?.framing?.text].forEach((text) => {
+        framingEnvironmentNames(text).forEach((name) => {
+            if (!named.some((item) => compactEnvironmentName(item) === compactEnvironmentName(name))) {
+                named.push(name);
+            }
+        });
+    });
+    const names = named.length ? named : workspaceEnvironmentNames(workspaceScene);
     const rows = Array.isArray(entities) ? entities : [];
     const sheets = [];
     const seen = new Set();

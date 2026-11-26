@@ -17,12 +17,15 @@ import subprocess
 import tempfile
 from typing import List
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 class LayoutRenderError(RuntimeError):
     """Blender could not render the white model."""
 
+
+_SHEET = (1280, 720)
+_CELL = (640, 360)
 
 _BLENDER_TEMPLATE = r"""
 import base64
@@ -235,12 +238,13 @@ def camera(name, location, target):
     direction = Vector(target) - Vector(location)
     if direction.length < 1e-6:
         direction = Vector((0.0, 0.0, -1.0))
-    # Straight down keeps north toward the top of the frame. A look-at up-axis
-    # parallel to the view direction twists the plan.
-    if abs(direction.normalized().z) > 0.98:
-        obj.rotation_euler = (0.0, 0.0, 0.0) if direction.z <= 0 else (math.pi, 0.0, 0.0)
+    if VIEW:
+        if abs(direction.normalized().z) > 0.98:
+            obj.rotation_euler = (0.0, 0.0, 0.0) if direction.z <= 0 else (math.pi, 0.0, 0.0)
+        else:
+            obj.rotation_euler = direction.to_track_quat("-Z", "Z").to_euler()
     else:
-        obj.rotation_euler = direction.to_track_quat("-Z", "Z").to_euler()
+        obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
     bpy.context.scene.collection.objects.link(obj)
     return obj
 
@@ -762,21 +766,16 @@ def _encode_line_video(folder: str, fps: int) -> bytes:
 
 def _composite_quad(folder: str) -> bytes:
     """North, east, south, west, in that order, on one 16:9 sheet."""
-    from PIL import ImageDraw
-
-    sheet = Image.new("RGB", (1280, 720), (255, 255, 255))
-    places = (("north", 0, 0), ("east", 640, 0), ("south", 0, 360), ("west", 640, 360))
-    for name, left, top in places:
-        path = os.path.join(folder, name + ".png")
-        if not os.path.isfile(path):
-            raise LayoutRenderError("白模四宫缺了一格。")
-        cell = orientation_lines(Image.open(path).convert("RGB"))
-        if cell.size != (640, 360):
-            cell = cell.resize((640, 360), Image.Resampling.NEAREST)
+    missing = [name for name in ("north", "east", "south", "west") if not os.path.isfile(os.path.join(folder, name + ".png"))]
+    if missing:
+        raise LayoutRenderError("白模四宫缺了一格。")
+    sheet = Image.new("RGB", _SHEET, (255, 255, 255))
+    for name, (left, top) in zip(("north", "east", "south", "west"), ((0, 0), (_CELL[0], 0), (0, _CELL[1]), (_CELL[0], _CELL[1]))):
+        cell = orientation_lines(Image.open(os.path.join(folder, name + ".png")).convert("RGB").resize(_CELL))
         sheet.paste(cell, (left, top))
     draw = ImageDraw.Draw(sheet)
-    draw.line((640, 0, 640, 719), fill=(70, 70, 72), width=2)
-    draw.line((0, 360, 1279, 360), fill=(70, 70, 72), width=2)
+    draw.line((_CELL[0], 0, _CELL[0], _SHEET[1]), fill=(0, 0, 0), width=2)
+    draw.line((0, _CELL[1], _SHEET[0], _CELL[1]), fill=(0, 0, 0), width=2)
     return _png_bytes(sheet)
 
 

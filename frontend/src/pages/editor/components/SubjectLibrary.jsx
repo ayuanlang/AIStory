@@ -7716,7 +7716,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         });
         const summary = String(result?.summary || '').trim();
         const targets = Array.isArray(result?.updated_targets) ? result.updated_targets.filter(Boolean) : [];
-        const imageEditInstruction = String(result?.image_edit_instruction || '').trim();
+        const imageEditInstruction = result?.halt ? '' : String(result?.image_edit_instruction || '').trim();
         const selfRow = rows.find((row) => String(row?.id || '') === entityId);
         const nextEntity = selfRow
             ? {
@@ -7732,7 +7732,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             imageEditInstruction,
             nextEntity,
             consistent: Boolean(result?.consistent),
+            status: String(result?.status || '').trim(),
+            halt: Boolean(result?.halt) || String(result?.status || '').trim() === '无法核对',
         };
+    };
+
+    const stopConsistencyFlow = (entityId, absorbed, options = null) => {
+        const summary = String(absorbed?.summary || '').trim();
+        const text = summary
+            ? `${summary}${summary.endsWith('。') ? '' : '。'}已停止，没有局部修改，也没有提质重生。`
+            : t('参考图无法核对，已停止。没有局部修改，也没有提质重生。', 'The reference image could not be checked. Stopped before a local edit or a quality regen.');
+        if (!options?.waitForImage) {
+            setEnvironmentConsistency({ entityId, running: false, text, tone: 'error' });
+            showSubjectNotification(text, 'error');
+        }
+        onLog?.(text, 'error');
+        return text;
     };
 
     const handleEnvironmentConsistencyCheck = async (entity) => {
@@ -7777,6 +7792,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 whiteModelPosition: whiteModel?.position || '',
             });
             const absorbed = absorbEnvironmentConsistencyResult(entity, result);
+            if (absorbed.halt) {
+                stopConsistencyFlow(entityId, absorbed);
+                return;
+            }
             const { summary, targets, imageEditInstruction, nextEntity } = absorbed;
             if (!imageEditInstruction) {
                 const text = result?.consistent
@@ -7840,6 +7859,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 whiteModelPosition: facingModel?.position || '',
             });
             const absorbed = absorbEnvironmentConsistencyResult(entity, result);
+            if (absorbed.halt) {
+                const text = stopConsistencyFlow(entityId, absorbed, { waitForImage });
+                if (waitForImage) throw new Error(text);
+                return { ok: false, halted: true };
+            }
             const instruction = absorbed.imageEditInstruction;
             if (isSpecialCutDerivedEntity(entity)) {
                 const redrawPrompt = String(absorbed.nextEntity?.generation_prompt_cn || prompt || '').trim();

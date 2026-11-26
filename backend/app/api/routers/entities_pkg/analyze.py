@@ -1528,10 +1528,12 @@ async def check_environment_consistency(
         )
         return {
             "consistent": bool(plan["consistent"]),
+            "status": plan.get("status") or ("完全匹配" if plan.get("consistent") and not plan.get("image_edit_instruction") else "需要修改"),
+            "halt": bool(plan.get("halt")),
             "summary": plan["summary"],
             "checked_kind": plan["kind"],
             "updated_targets": plan["updated_targets"],
-            "image_edit_instruction": plan.get("image_edit_instruction"),
+            "image_edit_instruction": None if plan.get("halt") else plan.get("image_edit_instruction"),
             "updated": [entity_consistency_payload(entities_by_id[item_id]) for item_id in touched],
         }
     except ConsistencyApplyError as exc:

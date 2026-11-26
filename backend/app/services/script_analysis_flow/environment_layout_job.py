@@ -168,6 +168,67 @@ def schedule_scene_white_model(
     )
 
 
+_CELL_BY_ANGLE = {0: "左上", 90: "右上", 180: "左下", 270: "右下"}
+
+
+def _quad_cell_url(entity: Any, angle: int) -> str:
+    if entity is None:
+        return ""
+    import json
+
+    from app.services.script_analysis_flow.derived_env_ingest import _quad_cell_record
+    from app.services.script_analysis_flow.environment_consistency import attrs_of
+
+    record = _quad_cell_record(attrs_of(entity))
+    cells = record.get("cells")
+    if isinstance(cells, str) and cells.strip():
+        try:
+            cells = json.loads(cells)
+        except json.JSONDecodeError:
+            cells = None
+    if not isinstance(cells, dict):
+        return ""
+    value = cells.get(_CELL_BY_ANGLE.get(int(angle), ""))
+    if isinstance(value, dict):
+        value = value.get("url") or value.get("image_url") or value.get("href")
+    return str(value or "").strip()
+
+
+def _find_named_environment(db: Any, project_id: int, name: str) -> Any:
+    from app.models.all_models import Entity
+    from app.services.script_analysis_flow.environment_consistency import is_environment_entity
+    from app.services.script_analysis_flow.environment_reuse import normalize_environment_name
+    from app.services.soft_delete import _active_entity_clause
+
+    key = normalize_environment_name(name)
+    if not key:
+        return None
+    rows = (
+        db.query(Entity)
+        .filter(Entity.project_id == int(project_id), _active_entity_clause())
+        .all()
+    )
+    found = None
+    for row in rows:
+        if not is_environment_entity(row):
+            continue
+        if normalize_environment_name(getattr(row, "name", "")) != key:
+            continue
+        if str(getattr(row, "image_url", "") or "").strip():
+            return row
+        found = row
+    return found
+
+
+def derived_environment_image_url(db: Any, project_id: int, name: str, angle: int, main_entity: Any = None) -> str:
+    """The picture of this derived view. A cropped cell wins over the four-grid sheet."""
+    row = _find_named_environment(db, int(project_id), name)
+    cell = _quad_cell_url(row, angle) or _quad_cell_url(main_entity, angle)
+    if cell:
+        return cell
+    return str(getattr(row, "image_url", "") or "").strip() if row is not None else ""
+
+
 def _find_main_environment(db: Any, project_id: int, name: str) -> Any:
     from app.models.all_models import Entity
     from app.services.script_analysis_flow.environment_consistency import is_main_environment_entity
@@ -304,6 +365,7 @@ async def _render_group(
     fixtures: Sequence[Dict[str, Any]],
     entity_id: int,
     views: Optional[Sequence[str]] = None,
+    view_images: Optional[Dict[str, str]] = None,
     animate_prompt: str = "",
     animate_seconds: float = 4.0,
 ) -> Dict[str, Any]:
@@ -337,6 +399,20 @@ async def _render_group(
         view = str(item or "").strip().lower()
         if view and view not in chosen_views:
             chosen_views.append(view)
+    pictures: Dict[str, str] = {}
+    for view, url in (view_images or {}).items():
+        key = str(view or "").strip().lower()
+        link = str(url or "").strip()
+        if key and link:
+            pictures[key] = link
+
+    def view_picture_list() -> List[str]:
+        found: List[str] = []
+        for view in chosen_views:
+            link = pictures.get(view, "")
+            if link and link not in found:
+                found.append(link)
+        return found
     try:
         user = db.query(User).filter(User.id == int(user_id)).first()
         if user is None:
@@ -356,7 +432,8 @@ async def _render_group(
             return {"name": name, "entity_id": int(entity_id), "image_url": "", "error": "没有可用模型"}
         raw_config = llm_config.get("config")
         api_config = dict(raw_config) if isinstance(raw_config, dict) else {}
-        messages = layout_messages(opening, occupants=occupants)
+        room_text = "" if view_picture_list() else opening
+        messages = layout_messages(room_text, occupants=occupants, images=view_picture_list())
         call_config = {
             "provider": provider,
             "api_key": str(llm_config.get("api_key") or "").strip() or None,
@@ -405,10 +482,12 @@ async def _render_group(
 
         def read_layout(content: str) -> tuple[str, list]:
             script_text, layout_boxes = layout_script_from_model_text(content)
-            gap = layout_script_gaps(opening, layout_boxes)
-            if gap:
-                raise LayoutError(gap)
-            script_text = merge_occupant_script(apply_facing(script_text, opening), occupants)
+            if str(room_text or "").strip():
+                gap = layout_script_gaps(room_text, layout_boxes)
+                if gap:
+                    raise LayoutError(gap)
+                script_text = apply_facing(script_text, room_text)
+            script_text = merge_occupant_script(script_text, occupants)
             layout_boxes, _meta = boxes_from_layout_script(script_text)
             return script_text, layout_boxes
 
@@ -417,7 +496,7 @@ async def _render_group(
         except LayoutError as first_error:
             try:
                 retry = await llm_service.chat_completion_with_fallback(
-                    layout_messages(opening, str(first_error), occupants=occupants),
+                    layout_messages(room_text, str(first_error), occupants=occupants, images=view_picture_list()),
                     call_config,
                 )
                 if isinstance(retry, dict):
@@ -435,12 +514,21 @@ async def _render_group(
                 animation_script_from_model_text,
                 fallback_motion,
                 mass_names,
+                missing_occupant_moves,
             )
 
             names = mass_names(script_text)
-            try:
+
+            async def ask(missing: str = "") -> str:
                 reply = await llm_service.chat_completion_with_fallback(
-                    animation_messages(animate_prompt, script_text, view, animate_seconds),
+                    animation_messages(
+                        animate_prompt,
+                        script_text,
+                        view,
+                        animate_seconds,
+                        missing,
+                        images=[pictures[view]] if pictures.get(view) else [],
+                    ),
                     call_config,
                 )
                 extra = (reply or {}).get("usage", {}) if isinstance(reply, dict) else {}
@@ -457,8 +545,18 @@ async def _render_group(
                     names=names,
                     seconds=animate_seconds,
                 )
+
+            try:
+                motion = await ask()
             except LayoutError:
                 return fallback_motion(view, animate_seconds)
+            gap = missing_occupant_moves(motion, names)
+            if not gap:
+                return motion
+            try:
+                return await ask(gap)
+            except LayoutError:
+                return motion
 
         async def paint(script_text: str) -> List[tuple]:
             if not chosen_views:
@@ -480,7 +578,7 @@ async def _render_group(
         except LayoutRenderError as render_error:
             tail = " ".join(str(render_error).split())[:500]
             revised = await llm_service.chat_completion_with_fallback(
-                layout_messages(opening, f"白模渲染报错：{tail}", script, occupants=occupants),
+                layout_messages(room_text, f"白模渲染报错：{tail}", script, occupants=occupants, images=view_picture_list()),
                 call_config,
             )
             if isinstance(revised, dict):
@@ -764,7 +862,6 @@ async def generate_shot_white_model(
 
     from app.db.session import SessionLocal
     from app.models.all_models import Shot
-    from app.services.script_analysis_flow.environment_consistency import main_environment_opening_text
     from app.services.script_analysis_flow.environment_layout import occupant_mass_script
 
     targets = shot_derived_targets(hint)
@@ -786,26 +883,28 @@ async def generate_shot_white_model(
         try:
             entity = _find_main_environment(db, int(project_id), main)
             entity_id = int(entity.id) if entity is not None else 0
-            opening = str(main_environment_opening_text(entity) or "").strip() if entity is not None else ""
+            view_images = {
+                str(item["view"]): derived_environment_image_url(
+                    db, int(project_id), str(item["name"]), int(item["angle"]), entity,
+                )
+                for item in items
+            }
         finally:
             db.close()
-        source = opening or _fixture_opening(pose.get("fixtures") or [])
-        if entity_id <= 0:
-            errors.append(f"{main}：主环境还没有入库")
-            continue
-        if not source:
-            errors.append(f"{main}：没有开篇")
+        if not any(str(url or "").strip() for url in view_images.values()):
+            errors.append(f"{main}：没有衍生环境图")
             continue
         rendered = await _render_group(
             project_id=int(project_id),
             user_id=int(user_id),
             username=str(username or ""),
             name=main,
-            opening=source,
+            opening="",
             occupants=occupants,
             fixtures=list(pose.get("fixtures") or []),
             entity_id=entity_id,
             views=views,
+            view_images=view_images,
             animate_prompt=story,
             animate_seconds=seconds,
         )

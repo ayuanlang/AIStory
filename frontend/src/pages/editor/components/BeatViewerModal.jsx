@@ -186,7 +186,7 @@ const NodeColumn = ({ node, entries, sceneHasText, shotWithoutBeat, t }) => {
         );
     }
     return (
-        <section className="flex h-[46vh] min-w-[280px] flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/30 xl:h-full">
+        <section className="flex h-[46vh] min-w-[220px] flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/30 xl:h-full">
             <header className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
                 <div className="min-w-0">
                     <div className="truncate text-sm font-bold text-white">{title}</div>
@@ -257,7 +257,7 @@ const StoryboardColumn = ({ shots, status, t }) => {
         );
     }
     return (
-        <section className="flex h-[46vh] min-w-[280px] flex-1 flex-col overflow-hidden rounded-xl border border-sky-400/20 bg-black/30 xl:h-full">
+        <section className="flex h-[46vh] min-w-[240px] flex-1 flex-col overflow-hidden rounded-xl border border-sky-400/20 bg-black/30 xl:h-full">
             <header className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
                 <div className="min-w-0">
                     <div className="truncate text-sm font-bold text-white">{t('分镜生成', 'Storyboard')}</div>
@@ -488,8 +488,8 @@ export default function BeatViewerModal({
                         </h3>
                         <p className="mt-1 text-xs text-white/45">
                             {t(
-                                '选节拍看四个上游节点和盖住它的分镜。选一镜时，按合镜Beat往前展开文戏、武戏、现场编排和建置与入戏。',
-                                'Pick a beat to see the upstream nodes and the shots that cover it. Pick a shot to trace 合镜Beat back through drama, action, floor staging, and blocking.',
+                                '选节拍看五个上游节点和盖住它的分镜。选一镜时，按合镜Beat往前展开文戏、武戏、物理编排、拍摄编排和建置与入戏。',
+                                'Pick a beat to see the five upstream nodes and the shots that cover it. Pick a shot to trace 合镜Beat back through drama, action, world layout, camera staging, and blocking.',
                             )}
                         </p>
                     </div>
@@ -532,6 +532,15 @@ export default function BeatViewerModal({
                                         await onRefreshEntities();
                                     } catch {
                                         // Keep the picture already on this scene if the refresh fails.
+                                    }
+                                }
+                                if (dbSceneId && typeof fetchShots === 'function') {
+                                    try {
+                                        const rows = await fetchShots(dbSceneId);
+                                        setShots(normalizeStoryboardShots(rows));
+                                        setShotsStatus('ready');
+                                    } catch {
+                                        // Keep the clips already loaded for this scene.
                                     }
                                 }
                                 setWhiteModelOpen(true);
@@ -636,8 +645,8 @@ export default function BeatViewerModal({
                     {!scenes.length ? (
                         <div className="flex h-full items-center justify-center px-6 text-center text-sm leading-6 text-white/45">
                             {t(
-                                '还没有可查看的逐场成稿。完成文戏增强、武戏增强、现场编排、建置与入戏或分镜后，就可以按节拍对照。',
-                                'No per-scene drafts yet. After drama, action, floor staging, blocking, or storyboards finish, beats can be compared here.',
+                                '还没有可查看的逐场成稿。完成文戏增强、武戏增强、物理编排、拍摄编排、建置与入戏或分镜后，就可以按节拍对照。',
+                                'No per-scene drafts yet. After drama, action, world layout, camera staging, blocking, or storyboards finish, beats can be compared here.',
                             )}
                         </div>
                     ) : (

@@ -2446,17 +2446,29 @@ def _downstream_project_tail(
     tail_parts: Dict[str, str],
     *,
     keep_nameplate: bool = True,
+    keep_director: bool = False,
 ) -> str:
-    """Nameplate and episode summary only when this scene does not already carry them."""
+    """Nameplate and episode summary only when this scene does not already carry them.
+
+    Director style is injected only for framing. Drama must not receive the name.
+    """
     parts: List[str] = []
     blob = f"{brief}\n{scene_block}"
     nameplate = str((tail_parts or {}).get("nameplate") or "").strip()
     comprehensive = str((tail_parts or {}).get("comprehensive") or "").strip()
+    director = str((tail_parts or {}).get("director") or "").strip()
     leftover = str((tail_parts or {}).get("leftover") or "").strip()
     if keep_nameplate and nameplate and "【名牌展现】" not in blob:
         parts.append(nameplate)
     if comprehensive and not _scene_has_comprehensive(scene_block):
         parts.append(comprehensive)
+    if (
+        keep_director
+        and director
+        and "导演借鉴" not in blob
+        and "director_style" not in blob
+    ):
+        parts.append(director)
     if leftover:
         parts.append(leftover)
     return "\n\n".join(parts)
@@ -4810,6 +4822,7 @@ async def _run_derived_framing_then_staging(
                 brief,
                 parts,
                 keep_nameplate=False,
+                keep_director=True,
             )
         return str(project_tail or "")
 
@@ -5538,6 +5551,12 @@ async def run_scene_subskill_pipeline(
             db,
             node_episode_id,
             keys=("comprehensive_plot", "comprehensive_assets"),
+        ),
+        "director": _subskill_visual_backfill_injection(
+            script_text,
+            db,
+            node_episode_id,
+            keys=("director_style",),
         ),
         "leftover": leftover_tail,
     }

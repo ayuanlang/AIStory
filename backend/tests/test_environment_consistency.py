@@ -1297,3 +1297,81 @@ def test_derived_main_consistency_injects_source_prompt_and_delta():
     assert edited.find("改左上格的幕墙") < edited.find("改右下格的幕墙")
     assert "一起改" in edited
     assert "不要只改一格" in edited
+
+
+def test_unreadable_reference_stops_before_prompt_or_image_edit():
+    derived = Dummy(
+        id=9,
+        name="180度指挥室",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 180},
+    )
+    main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
+    payload = {
+        "consistent": False,
+        "summary": "两张参考图均未能正常打开，无法完成对宫格正文及白模朝向与参考图的实际核对。",
+        "revised_cell": None,
+        "revised_prompt": None,
+        "revised_main_prompt": None,
+        "image_edit_instruction": "改这一张图里的台。",
+    }
+    plan = plan_consistency_writes(derived, main, "", payload)
+    assert plan["halt"] is True
+    assert plan["status"] == "无法核对"
+    assert plan["consistent"] is False
+    assert plan["writes"] == []
+    assert plan["image_edit_instruction"] is None
+
+    declared = plan_consistency_writes(
+        derived,
+        main,
+        "",
+        {
+            "status": "无法核对",
+            "consistent": False,
+            "summary": "参考图下载失败。",
+            "revised_prompt": "不要写进衍生提示词。",
+        },
+    )
+    assert declared["halt"] is True
+    assert declared["writes"] == []
+    assert declared["image_edit_instruction"] is None
+
+
+def test_incomplete_verdict_without_changes_stops():
+    derived = Dummy(
+        id=9,
+        name="180度指挥室",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 180},
+    )
+    main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
+    plan = plan_consistency_writes(
+        derived,
+        main,
+        "",
+        {"consistent": False, "summary": "还没法下结论。", "revised_cell": None, "image_edit_instruction": None},
+    )
+    assert plan["status"] == "无法核对"
+    assert plan["halt"] is True
+    assert plan["writes"] == []
+
+
+def test_explicit_match_still_fills_an_empty_cell_prompt():
+    derived = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "main_environment": "厨房", "view_angle_from_main": 90},
+    )
+    main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
+    plan = plan_consistency_writes(
+        derived,
+        main,
+        "",
+        {"status": "完全匹配", "consistent": True, "summary": "这一格和参考图都对上了。"},
+    )
+    assert plan.get("halt") is not True
+    filled = next(item["value"] for item in plan["writes"] if item["field"] == "generation_prompt_cn")
+    assert "台在画面侧面" in filled
+    assert plan["image_edit_instruction"] is None
