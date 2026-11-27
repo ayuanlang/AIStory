@@ -1052,6 +1052,18 @@ function whiteModelHolder(entity, entities) {
  * White-model sheet used as the facing reference for a consistency check.
  * A four-grid asset compares the whole sheet. A single cell names which quadrant.
  */
+export function whiteModelFromConsistencyResult(result) {
+    const url = String(result?.white_model_url || '').trim();
+    if (!url) return null;
+    const scope = String(result?.white_model_scope || '').trim() === 'sheet' ? 'sheet' : 'quad';
+    return {
+        url,
+        scope,
+        position: scope === 'sheet' ? String(result?.white_model_position || '').trim() : '',
+        entityId: String(result?.white_model_entity_id || '').trim(),
+    };
+}
+
 export function consistencyWhiteModel(entity, entities) {
     if (!isEnvironmentEntity(entity)) return null;
     const list = Array.isArray(entities) ? entities : [];

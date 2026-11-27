@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-from app.services.script_analysis_flow.environment_quad_facing import quad_facing_lock
+from app.services.script_analysis_flow.environment_layout_job import stored_white_model_script
+from app.services.script_analysis_flow.environment_quad_facing import opening_digest, quad_facing_lock
 
 
 _SCRIPT = """
@@ -18,6 +19,14 @@ def _subject_lines(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if line.startswith("[@"))
 
 
+def _placement(text: str) -> str:
+    clauses = []
+    for line in text.splitlines():
+        if line.startswith("[@"):
+            clauses.append(line.split("：", 1)[-1])
+    return "\n".join(clauses)
+
+
 def test_facing_lock_uses_the_white_model_axes_and_skips_people():
     lock = quad_facing_lock("书斋", _SCRIPT)
     subjects = _subject_lines(lock)
@@ -31,10 +40,12 @@ def test_facing_lock_uses_the_white_model_axes_and_skips_people():
     assert "右上屏面朝着镜头" in lock
     assert "左下屏面朝画面右，见侧沿" in lock
     assert "右下屏面背对镜头" in lock
+    assert "[@北墙墙皮]：左上这一格在正面。右上这一格在画面左。左下这一格在镜头后，不点名。右下这一格在画面右。" in lock
+    assert "[@南墙墙皮]：左上这一格在镜头后，不点名。右上这一格在画面右。左下这一格在正面。右下这一格在画面左。" in lock
     assert "顾沉舟" not in lock
     assert "米" not in subjects
     for word in ("东", "南", "西", "北"):
-        assert word not in subjects
+        assert word not in _placement(lock)
 
 
 def test_north_south_long_edge_swaps_the_wide_cells():
@@ -52,6 +63,17 @@ def test_square_top_has_no_wide_sentence():
     assert "宽的一面" not in lock
     assert "窄的一面" not in lock
     assert "[@方几]：朝上。四格不写成朝着镜头。" in lock
+
+
+def test_asset_design_reuses_a_stored_white_model_script_and_does_not_invent_one():
+    opening = "【六面一次】\n书案在中。"
+    digest = opening_digest(opening)
+    assert stored_white_model_script(
+        {"layout_script": _SCRIPT, "layout_opening_digest": digest},
+        opening,
+    ) == _SCRIPT.strip()
+    assert stored_white_model_script({"layout_script": _SCRIPT, "layout_opening_digest": "other"}, opening) == ""
+    assert stored_white_model_script({}, opening) == ""
 
 
 def test_people_only_script_has_no_lock():

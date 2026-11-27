@@ -69,11 +69,13 @@ QUAD_SHEET_SENTENCE = (
     + "。左上望北，右上望东，左下望南，右下望西。"
     "四格是同一处的四个方向，材质与开闭相同。"
     "东、南、西、北和望北、望东、望南、望西不画成字，不画角标。"
-    "只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物、灯、灯管或第二道门。"
+    "只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物、灯、灯管、绿植、台灯、笔筒、电脑、画、窗外的城或第二道门。"
+    "门只画点到的那一扇。不画第二扇。不把全关画成开着。不画门外的走廊。"
 )
 _SHEET_ECHO_RE = re.compile(
     r"同一张16:9图，必须画成2×2四宫格[\s\S]*?不画角标。"
-    r"(?:只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物(?:、灯、灯管)?或第二道门。)?"
+    r"(?:只画各格已经点名的主体。[\s\S]*?第二道门。)?"
+    r"(?:门只画点到的那一扇。[\s\S]*?走廊。)?"
 )
 _MATERIAL_LEGEND = (
     "外形、材质、纹样、颜色只供四格对号上色。"
@@ -82,7 +84,8 @@ _MATERIAL_LEGEND = (
     "格子写了只见向里的厚或见侧沿，不画这一面的门、显示面和图谱。"
     "格子写了单扇，拼接、模块、分块仍是这一扇上的纹，中间不画对缝。"
     "格子写了两端不到画面边缘，多门和百叶不铺满该壁。"
-    "窄面格不画台面上的图。"
+    "窄面格不画台面上的图。窄面格的桌只画左右窄、往后长的那一面，不画成左右宽的正对桌面。"
+    "玻璃外不画城、楼、树。不另加绿植、台灯、笔筒、电脑、画。"
 )
 _DEPTH_CLAUSE_RE = re.compile(r"(?:纵深色层|前景=|中部=|背景=)[^｜\n]*")
 QUAD_CELL_POSITIONS = ("左上", "右上", "左下", "右下")
@@ -2736,6 +2739,9 @@ def _with_material_legend(section: str) -> str:
     return f"{title}\n{_MATERIAL_LEGEND}\n{body}"
 
 
+_COLOR_LEAK_WORDS = ("全息屏", "指示灯", "绿植", "盆栽", "台灯", "笔筒", "笔记本电脑", "笔记本", "电脑")
+
+
 def _strip_depth_clauses(section: str) -> str:
     body = str(section or "")
     cleaned = _DEPTH_CLAUSE_RE.sub("", body)
@@ -2743,6 +2749,24 @@ def _strip_depth_clauses(section: str) -> str:
     cleaned = re.sub(r"｜\s*(?=\n|$)", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
+
+
+def _strip_unlisted_color_props(section: str, subjects: str) -> str:
+    """Drop color-note names the image model draws when they are not registered subjects."""
+    text = str(section or "")
+    listed = str(subjects or "")
+
+    def _at_name(match: re.Match) -> str:
+        name = match.group(1)
+        return match.group(0) if name and name in listed else ""
+
+    text = re.sub(r"@([^\s｜，。；]+)", _at_name, text)
+    for word in _COLOR_LEAK_WORDS:
+        if word not in listed:
+            text = text.replace(word, "")
+    text = re.sub(r"[与和]{2,}", "与", text)
+    text = re.sub(r"＠", "", text)
+    return text.strip()
 
 
 def compose_stored_quad_prompt(
@@ -2772,6 +2796,9 @@ def compose_stored_quad_prompt(
             section = _strip_depth_clauses(section)
         if section:
             sections[name] = section
+    subjects = sections.get("主体外形", "").replace(_MATERIAL_LEGEND, "")
+    if sections.get("色彩说明"):
+        sections["色彩说明"] = _strip_unlisted_color_props(sections["色彩说明"], subjects)
     quad = _strip_sheet_echo(_quad_only_prompt(returned_prompt))
     parts: List[str] = []
     if quad:

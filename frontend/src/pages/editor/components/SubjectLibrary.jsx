@@ -58,6 +58,7 @@ import {
     applyWhiteModelQuadReference,
     whiteModelReferenceUrl,
     consistencyWhiteModel,
+    whiteModelFromConsistencyResult,
     withWhiteModelEditInstruction,
     readSavedGridRegenPrompt,
     stripMainEnvironmentDraftWrapper,
@@ -7750,6 +7751,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return text;
     };
 
+    const adoptConsistencyWhiteModel = (result) => {
+        const model = whiteModelFromConsistencyResult(result);
+        if (!model?.url) return null;
+        const ownerId = String(model.entityId || '').trim();
+        if (ownerId) {
+            const current = (allEntitiesRef.current || allEntities || []).find((row) => String(row?.id || '') === ownerId);
+            if (current) {
+                applyEntityLocalPatch(ownerId, {
+                    custom_attributes: {
+                        ...parseEntityCustomAttributes(current),
+                        layout_image_url: model.url,
+                    },
+                });
+            }
+        }
+        return model;
+    };
+
     const handleEnvironmentConsistencyCheck = async (entity) => {
         const entityId = String(entity?.id || '').trim();
         if (!entityId || entityId === 'new' || !isEnvironmentEntity(entity)) return;
@@ -7783,6 +7802,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         try {
             const library = allEntitiesRef.current || allEntities;
             const whiteModel = consistencyWhiteModel(entity, library);
+            if (!whiteModel?.url) {
+                setEnvironmentConsistency({
+                    entityId,
+                    running: true,
+                    text: t('还没有白模，先按开篇生成白模，再核对朝向。', 'No white model yet. Generating one from the opening, then checking facing.'),
+                    tone: '',
+                });
+            }
             const result = await checkEnvironmentImageConsistency(entityId, {
                 prompt,
                 note,
@@ -7792,6 +7819,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 whiteModelPosition: whiteModel?.position || '',
             });
             const absorbed = absorbEnvironmentConsistencyResult(entity, result);
+            const checkedModel = adoptConsistencyWhiteModel(result) || whiteModel;
             if (absorbed.halt) {
                 stopConsistencyFlow(entityId, absorbed);
                 return;
@@ -7805,12 +7833,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 showSubjectNotification(text, 'success');
                 return;
             }
-            const editText = withWhiteModelEditInstruction(imageEditInstruction, whiteModel);
+            const editText = withWhiteModelEditInstruction(imageEditInstruction, checkedModel);
             const text = summary || t('已按差异生成改图指令，正在局部修改图片。', 'Built an edit instruction from the differences and started a local image edit.');
             setAdvancedInstruction(editText);
             setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
             showSubjectNotification(text, 'success');
-            await submitAdvancedLocalModify(nextEntity, editText, { whiteModel });
+            await submitAdvancedLocalModify(nextEntity, editText, { whiteModel: checkedModel });
         } catch (error) {
             const message = consistencyDetailText(error);
             setEnvironmentConsistency({ entityId, running: false, text: message, tone: 'error' });
@@ -7846,11 +7874,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 ),
                 'process'
             );
-            if (!waitForImage) setEnvironmentConsistency({ entityId, running: true, text: '', tone: '' });
             const library = entities || allEntitiesRef.current || allEntities;
             const whiteModel = consistencyWhiteModel(entity, library);
             const whiteUrl = String(whiteModel?.url || '').trim();
             const facingModel = whiteUrl && whiteUrl !== cropUrl ? whiteModel : null;
+            if (!waitForImage) {
+                setEnvironmentConsistency({
+                    entityId,
+                    running: true,
+                    text: facingModel
+                        ? ''
+                        : t('还没有白模，先按开篇生成白模，再核对朝向。', 'No white model yet. Generating one from the opening, then checking facing.'),
+                    tone: '',
+                });
+            }
             const result = await checkEnvironmentImageConsistency(entityId, {
                 prompt,
                 imageUrl: cropUrl,
@@ -7859,6 +7896,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 whiteModelPosition: facingModel?.position || '',
             });
             const absorbed = absorbEnvironmentConsistencyResult(entity, result);
+            const checkedModel = adoptConsistencyWhiteModel(result) || facingModel;
+            const checkedUrl = String(checkedModel?.url || '').trim();
+            const editModel = checkedUrl && checkedUrl !== cropUrl ? checkedModel : null;
             if (absorbed.halt) {
                 const text = stopConsistencyFlow(entityId, absorbed, { waitForImage });
                 if (waitForImage) throw new Error(text);
@@ -7924,9 +7964,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             }
             if (!waitForImage) {
                 if (instruction) {
-                    const editText = withWhiteModelEditInstruction(singleCellEditInstruction(instruction), facingModel);
+                    const editText = withWhiteModelEditInstruction(singleCellEditInstruction(instruction), editModel);
                     const refs = [{ url: cropUrl, type: 'image', weight: 0.8 }];
-                    if (facingModel) refs.push({ url: whiteUrl, type: 'image', weight: 0.55 });
+                    if (editModel) refs.push({ url: checkedUrl, type: 'image', weight: 0.55 });
                     const text = absorbed.summary || t('已按差异生成改图指令，正在局部修改图片。', 'Built an edit instruction from the differences and started a local image edit.');
                     setAdvancedInstruction(editText);
                     setEnvironmentConsistency({ entityId, running: false, text, tone: 'changed' });
@@ -7957,7 +7997,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const currentSize = getEpisodePreferredImageSize(currentEpisode?.episode_info || {});
             const nextSize = instruction ? currentSize : bumpImageSizeOption(currentSize);
             let promptToSend = instruction
-                ? withWhiteModelEditInstruction(singleCellEditInstruction(instruction), facingModel)
+                ? withWhiteModelEditInstruction(singleCellEditInstruction(instruction), editModel)
                 : ASSET_QUALITY_REGEN_PROMPT;
             let negativePrompt = '';
             if (!instruction) {
@@ -7966,7 +8006,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 negativePrompt = built.negative_prompt;
             }
             const imageRefs = [cropUrl];
-            if (instruction && facingModel) imageRefs.push(whiteUrl);
+            if (instruction && editModel) imageRefs.push(checkedUrl);
             const res = await generateImage(promptToSend, null, imageRefs, {
                 function_name: 'generate_subjects_i2i',
                 project_id: projectId,
@@ -8056,7 +8096,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     onClick={() => { void handleEnvironmentConsistencyCheck(entity); }}
                     disabled={!hasImage || busy}
                     title={hasImage
-                        ? t('对照图片和开篇，核对主体个数、件数核销、朝向、位置。有白模时，再对照白模核对主体朝向。有差异时按白模朝向改原图。', 'Compare the image with the opening for subject count, the piece-count ledger, facing, and position. When a white model exists, also check subject facing against it, then edit the original to match.')
+                        ? t('对照图片和开篇，核对主体个数、件数核销、朝向、位置。没有白模时先生成白模，再对照白模核对主体朝向。有差异时按白模朝向改原图。', 'Compare the image with the opening for subject count, the piece-count ledger, facing, and position. If there is no white model, generate one, then check subject facing against it and edit the original to match.')
                         : t('生成图片后才能检查。', 'Generate an image before checking.')}
                     className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-white/5 px-4 py-2 text-sm font-bold text-white/80 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >

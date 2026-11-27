@@ -1832,6 +1832,31 @@ def white_model_facing_clause(scope: str, position: str = "") -> str:
     )
 
 
+def consistency_white_model_owner(
+    entity: Any,
+    main_entity: Optional[Any],
+    depended_entity: Optional[Any],
+    kind: str,
+) -> Any:
+    """Main environment whose white model this check should render or reuse.
+
+    Angle cells are not owners. A derived main is, and falls back to the
+    environment it was cut from when that derived main has no opening.
+    """
+    if kind == "main":
+        ordered = [entity]
+    elif kind == "derived_main":
+        ordered = [entity, depended_entity]
+    else:
+        ordered = [main_entity, depended_entity, entity]
+    for row in ordered:
+        if row is None or is_derived_environment_entity(row):
+            continue
+        if main_environment_opening_text(row):
+            return row
+    return None
+
+
 def resolve_consistency_white_model(
     entity: Any,
     main_entity: Optional[Any],

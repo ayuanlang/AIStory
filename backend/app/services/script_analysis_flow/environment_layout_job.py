@@ -1026,29 +1026,37 @@ def _main_environment_entity(db: Any, project_id: int, episode_id: int, name: st
     return None
 
 
+def stored_white_model_script(attrs: Dict[str, Any], opening: str) -> str:
+    """White-model script already rendered for this exact opening.
+
+    Asset-design image generation does not render a new sheet. A consistency
+    check does that when the sheet is missing.
+    """
+    from app.services.script_analysis_flow.environment_quad_facing import opening_digest
+
+    script = str((attrs or {}).get("layout_script") or "").strip()
+    digest = str((attrs or {}).get("layout_opening_digest") or "").strip()
+    if not script or digest != opening_digest(opening):
+        return ""
+    return script
+
+
 async def prepare_quad_facing_locks(
     db: Any,
     *,
     project_id: int,
     episode_id: int,
-    user_id: int,
-    username: str,
     source_text: str,
 ) -> str:
-    """Render each main environment's white model, then return the facing locks.
+    """Facing locks from white models already stored for these openings.
 
-    A stored script is reused when it was built from this same opening.
-    Characters and props are not included.
+    Does not render. A missing sheet is left for the consistency check.
     """
     from app.services.script_analysis_flow.derived_env_ingest import (
         extract_named_design_openings,
         list_main_environment_draft_names,
     )
-    from app.services.script_analysis_flow.environment_layout import LayoutError
-    from app.services.script_analysis_flow.environment_quad_facing import (
-        opening_digest,
-        quad_facing_lock,
-    )
+    from app.services.script_analysis_flow.environment_quad_facing import quad_facing_lock
 
     names = list_main_environment_draft_names(source_text)
     if not names:
@@ -1062,36 +1070,39 @@ async def prepare_quad_facing_locks(
     for name in names:
         opening = str(openings.get(name.lower()) or "").strip()
         if not opening:
-            raise LayoutError(f"{name}：没有开篇，不能先出白模。")
+            continue
         entity = _main_environment_entity(db, int(project_id), int(episode_id), name)
         if entity is None:
-            raise LayoutError(f"{name}：没有这块主环境，不能先出白模。")
-        entity_id = int(getattr(entity, "id", 0) or 0)
+            continue
         attrs = dict(entity.custom_attributes) if isinstance(entity.custom_attributes, dict) else {}
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-        digest = opening_digest(opening)
-        script = str(attrs.get("layout_script") or "").strip()
-        if str(attrs.get("layout_opening_digest") or "") != digest or not script:
-            logger.info("[quad_white_model] render name=%s entity=%s", name, entity_id)
-            rendered = await _render_group(
-                project_id=int(project_id),
-                user_id=int(user_id),
-                username=str(username or ""),
-                name=name,
-                opening=opening,
-                occupants="",
-                fixtures=[],
-                entity_id=entity_id,
-            )
-            error = str((rendered or {}).get("error") or "").strip()
-            script = str((rendered or {}).get("script") or "").strip()
-            if error or not script:
-                raise LayoutError(f"{name}：白模没有生成，四宫提示词先不写。{error}")
+        script = stored_white_model_script(attrs, opening)
+        if not script:
+            logger.info("[quad_white_model] skip name=%s no stored white model", name)
+            continue
         lock = quad_facing_lock(name, script)
         if lock:
             blocks.append(lock)
     db.expire_all()
     return "\n\n".join(blocks)
+
+
+async def render_environment_white_model(
+    *,
+    project_id: int,
+    user_id: int,
+    username: str,
+    entity_id: int,
+    name: str,
+    opening: str,
+) -> Dict[str, Any]:
+    """Render this main environment's white model for a consistency check."""
+    return await _render_group(
+        project_id=int(project_id),
+        user_id=int(user_id),
+        username=str(username or ""),
+        name=str(name or ""),
+        opening=str(opening or ""),
+        occupants="",
+        fixtures=[],
+        entity_id=int(entity_id),
+    )

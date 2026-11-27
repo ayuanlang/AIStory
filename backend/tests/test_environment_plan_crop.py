@@ -86,6 +86,8 @@ def test_quad_input_keeps_rotatable_keys_and_drops_essays():
     text = f"【主环境设计稿】书斋\n{opening}【/主环境设计稿】"
     cropped = crop_quad_skill_input(text)
     assert "【定位】" not in cropped
+    assert "场所风格=书斋" in cropped
+    assert "术语系=" not in cropped
     assert "【色彩说明】" not in cropped
     assert "纹样=" not in cropped
     assert "颜色=" not in cropped

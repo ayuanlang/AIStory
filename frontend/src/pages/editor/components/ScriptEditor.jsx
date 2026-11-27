@@ -26595,8 +26595,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         assetDesignKeysToClear = null,
         assetDesignNamesToClear = null,
         assetDesignEnvScope = null,
+        baseStageOutputs = null,
     } = {}) {
-        const base = parseStageOutputsObject(activeEpisode?.ai_stage_outputs)
+        const base = parseStageOutputsObject(
+            baseStageOutputs != null ? baseStageOutputs : activeEpisode?.ai_stage_outputs
+        )
             || buildStageOutputsObject({
                 analysisRawText: activeEpisode?.ai_scene_analysis_result || '',
                 assetRawText: activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
@@ -26772,7 +26775,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // A single-scene storyboard rerun must not drop the other 分场's
         // finished storyboard nodes. The live-only flag makes the poller
         // treat those success rows as leftovers.
-        if (!storyboardPartial) {
+        // Asset-only reruns keep 全局统筹 / 环境规划. That flag would also
+        // make later saves treat Stage 1 as empty and drop the saved body.
+        if (!storyboardPartial && stage !== 'assets_gen') {
             analysisTrustLiveDownstreamOnlyRef.current = true;
         }
         const resolvedEnvScope = String(envScope || '').trim().toLowerCase()
@@ -26971,6 +26976,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         }
 
+        let assetStageOutputsBase = null;
+        if (stage === 'assets_gen') {
+            assetStageOutputsBase = String(activeEpisode?.ai_stage_outputs || '');
+            if (!readStage1OutputSlotContent(assetStageOutputsBase, 'scene_split')) {
+                try {
+                    const freshEpisode = await fetchEpisode(activeEpisode.id);
+                    const freshOutputs = String(freshEpisode?.ai_stage_outputs || '');
+                    if (freshOutputs.trim()) assetStageOutputsBase = freshOutputs;
+                } catch (_) {}
+            }
+            ['scene_split', 'environment_plan'].forEach((slotKey) => {
+                const slotText = readStage1OutputSlotContent(assetStageOutputsBase, slotKey);
+                if (slotText) pinStage1NodeOutput(slotKey, slotText);
+            });
+        }
+
         const episodePatch = {};
         if (clearAll) {
             episodePatch.ai_scene_analysis_result = '';
@@ -27008,7 +27029,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             // Partial scene-beats keep shared markdown; patch clear is handled by caller.
             if (!(clearSceneBeatsStage && sceneBeatsPartial)) {
-                episodePatch.ai_stage_outputs = buildClearedStageOutputsJson({
+                const rebuiltStageOutputs = buildClearedStageOutputsJson({
                     clearStage1: false,
                     clearSubjectIndex: clearFromExtract,
                     clearSceneMarkdown: clearFromSceneBeats || clearFromExtract,
@@ -27018,7 +27039,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ? scopedEntityNames
                         : null,
                     assetDesignEnvScope: stage === 'assets_gen' ? resolvedEnvScope : null,
+                    baseStageOutputs: stage === 'assets_gen' ? assetStageOutputsBase : null,
                 });
+                const sourceSplit = stage === 'assets_gen'
+                    ? readStage1OutputSlotContent(assetStageOutputsBase, 'scene_split')
+                    : '';
+                const rebuiltSplit = readStage1OutputSlotContent(rebuiltStageOutputs, 'scene_split');
+                if (stage === 'assets_gen' && !sourceSplit) {
+                    if (onLog) {
+                        onLog(
+                            '[Analysis Clear] skipped stage-output rewrite; 全局统筹 body was not loaded',
+                            'warning'
+                        );
+                    }
+                } else if (stage === 'assets_gen' && !rebuiltSplit) {
+                    if (onLog) {
+                        onLog(
+                            '[Analysis Clear] kept 全局统筹; asset clear would have dropped scene_split',
+                            'warning'
+                        );
+                    }
+                } else if (rebuiltStageOutputs) {
+                    episodePatch.ai_stage_outputs = rebuiltStageOutputs;
+                }
             }
         }
 
@@ -27065,8 +27108,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 // Scene-beats-only clear already applied via PUT. Do not invalidate analysis
                 // cache — that blanks Stage 1 and triggers a lazy GET that can resurrect old 2.2.
                 const shouldInvalidateAnalysisCache = !(clearSceneBeatsStage && !clearFromExtract);
+                const preserveStageFieldsOnAssetClear = stage === 'assets_gen'
+                    ? [
+                        'ai_scene_analysis_result',
+                        'ai_scene_analysis_adaptation',
+                        'ai_scene_analysis_scene_markdown',
+                        'ai_scene_analysis_subject_index',
+                        'ai_stage_outputs',
+                    ]
+                    : null;
                 await onRefreshEpisodes(shouldInvalidateAnalysisCache
-                    ? { invalidateEpisodeIds: [Number(activeEpisode.id)] }
+                    ? {
+                        invalidateEpisodeIds: [Number(activeEpisode.id)],
+                        ...(preserveStageFieldsOnAssetClear
+                            ? { preserveAnalysisFields: preserveStageFieldsOnAssetClear }
+                            : {}),
+                    }
                     : {});
             } catch (refreshErr) {
                 if (onLog) onLog(`[Analysis Clear] episode refresh warning: ${refreshErr?.message || refreshErr}`, 'warning');

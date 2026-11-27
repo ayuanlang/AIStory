@@ -1519,8 +1519,6 @@ async def execute_analyze_scene(
                 db,
                 project_id=quad_project_id,
                 episode_id=quad_episode_id,
-                user_id=int(getattr(current_user, "id", 0) or 0),
-                username=str(getattr(current_user, "username", "") or ""),
                 source_text=str(user_content or ""),
             )
             user_content = crop_quad_skill_input(str(user_content or ""))

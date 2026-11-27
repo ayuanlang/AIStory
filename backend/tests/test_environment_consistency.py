@@ -12,6 +12,7 @@ from app.services.script_analysis_flow.environment_consistency import (
     parse_consistency_payload,
     plan_consistency_writes,
     remote_vision_image_link,
+    consistency_white_model_owner,
     resolve_consistency_white_model,
 )
 
@@ -955,6 +956,27 @@ def test_quad_edit_drops_corner_labels_the_source_never_had():
     )
     assert "角标" not in messages[0]["content"]
     assert "另附白模图" not in messages[0]["content"]
+
+
+def test_consistency_check_owns_the_main_environment_white_model():
+    main = Dummy(id=3, name="厨房", prompt=MAIN_PROMPT)
+    cell = Dummy(
+        id=9,
+        name="90度厨房",
+        prompt="",
+        attrs={"derived_kind": "first_cut", "view_angle_from_main": 90, "main_environment": "厨房"},
+    )
+    assert consistency_white_model_owner(main, main, None, "main") is main
+    assert consistency_white_model_owner(cell, main, None, "cell") is main
+    derived = Dummy(
+        id=4,
+        name="厨房_破损",
+        prompt="",
+        attrs={"derived_kind": "derived_main"},
+    )
+    assert consistency_white_model_owner(derived, derived, main, "derived_main") is main
+    derived_with_opening = Dummy(id=5, name="厨房_破损", prompt=MAIN_PROMPT, attrs={"derived_kind": "derived_main"})
+    assert consistency_white_model_owner(derived_with_opening, derived_with_opening, main, "derived_main") is derived_with_opening
 
 
 def test_white_model_is_a_facing_reference_for_the_quad():

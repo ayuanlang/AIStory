@@ -100,15 +100,21 @@ def _screen_sentence(face: str) -> str:
     return "。".join(parts) + "。"
 
 
+def _cell_sentence(side: str) -> str:
+    places = _DOOR_CELL.get(side) or {}
+    if not places:
+        return ""
+    return "。".join(f"{cell}这一格{places[cell]}" for cell in _CELL_ORDER) + "。"
+
+
 def _door_sentence(row: Dict[str, Any], walls: Sequence[Dict[str, Any]]) -> str:
     parts: List[str] = []
     state = _OPEN_STATE.get(str(row.get("state") or "").strip(), "")
     if state:
         parts.append(state)
-    side = _wall_side(row, walls)
-    places = _DOOR_CELL.get(side) or {}
-    if places:
-        parts.extend(f"{cell}这一格{places[cell]}" for cell in _CELL_ORDER)
+    placed = _cell_sentence(_wall_side(row, walls)).rstrip("。")
+    if placed:
+        parts.append(placed)
     if not parts:
         return ""
     return "。".join(parts) + "。"
@@ -128,6 +134,10 @@ def quad_facing_lock(name: str, script: str) -> str:
             continue
         face = str(row.get("face") or "").strip()
         bits: List[str] = []
+        if kind == "wall":
+            placed = _cell_sentence(_wall_side(row, walls)).rstrip("。")
+            if placed:
+                bits.append(placed)
         if kind == "furniture" and not _is_screen(subject):
             wide = _wide_sentence(row)
             if wide:
@@ -148,7 +158,8 @@ def quad_facing_lock(name: str, script: str) -> str:
         return ""
     head = (
         f"【朝向锁】{title}\n"
-        "白模已经拍定这一处的朝向。宽面还是窄面、门在哪一格的正面、开着还是关着、屏面朝哪，按下面写。"
-        "格子里不写米，不写北东南西。长短边等朝向与白模不一致的，与白模保持一致。\n"
+        "白模已经拍定这一处的朝向。宽面还是窄面、哪一壁在哪一格、门在哪一格的正面、开着还是关着、屏面朝哪，按下面写。"
+        "锁里写了在镜头后、不点名的壁，那一格不画。格子里不写米，不写北东南西。"
+        "长短边等朝向与白模不一致的，与白模保持一致。\n"
     )
     return head + "\n".join(lines) + "\n【/朝向锁】"

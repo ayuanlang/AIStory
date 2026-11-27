@@ -554,7 +554,8 @@ _IDENT_INHERIT_POSITIONING = re.compile(
 
 _SHEET_PREFIX_RE = re.compile(
     r"^同一张16:9图，必须画成2×2四宫格[\s\S]*?不画角标。"
-    r"(?:只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物(?:、灯、灯管)?或第二道门。)?"
+    r"(?:只画各格已经点名的主体。[\s\S]*?第二道门。)?"
+    r"(?:门只画点到的那一扇。[\s\S]*?走廊。)?"
 )
 _CROP_SECTION_RE = re.compile(
     r"【(定位|主体外形|色彩说明|六面一次)】"

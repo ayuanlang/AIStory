@@ -376,6 +376,28 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert "煤灰蓝" in cropped
 
 
+def test_compose_drops_unlisted_color_props_and_names_the_image_cliches():
+    cells = (
+        "【四向拼图】\n"
+        "[0度格-左上·北]\n"
+        "[90度格-右上·东]\n"
+        "[180度格-左下·南]\n"
+        "[270度格-右下·西]\n"
+    )
+    draft = (
+        "【主体外形】\n[@办公桌]（M-001）外形=案，材质=木，纹样=无，颜色=深棕。\n"
+        "【色彩说明】\n调色机制=冷蓝环境基调与全息屏高光比。点缀暗橙@办公桌指示灯。\n"
+    )
+    stored = compose_stored_quad_prompt(draft, cells)
+    assert "全息屏" not in stored
+    assert "指示灯" not in stored
+    assert "冷蓝" in stored
+    assert "暗橙" in stored
+    assert "绿植、台灯、笔筒、电脑、画、窗外的城" in stored
+    assert "不画门外的走廊" in stored
+    assert stored.count("同一张16:9图") == 1
+
+
 def test_quad_apply_failure_names_the_gap():
     opening = "【六面一次】\n北壁=封闭面。\n"
     cells = (

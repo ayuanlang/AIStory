@@ -50,6 +50,18 @@ _OPTICAL_KEYS = {
 _SPLIT = re.compile(r"[｜|]")
 
 
+def _place_style(body: str) -> str:
+    """Keep the one place word the four-grid loft rule needs. Drop the rest of 定位."""
+    for raw in str(body or "").split("\n"):
+        for part in re.split(r"[｜|，]", raw):
+            if _field_key(part) != "场所风格":
+                continue
+            value = part.split("=", 1)[1].strip()
+            if value:
+                return value
+    return ""
+
+
 def _field_key(part: str) -> str:
     head = str(part or "").strip()
     if "=" not in head:
@@ -111,6 +123,11 @@ def crop_environment_opening_for_quad(opening: str) -> str:
         name = match.group(1).strip()
         start = match.end()
         end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
+        if name == "定位":
+            style = _place_style(text[start:end])
+            if style:
+                parts.append(f"【场所】\n场所风格={style}")
+            continue
         if name in _DROP_SECTIONS:
             continue
         if name == "四向拼图":
