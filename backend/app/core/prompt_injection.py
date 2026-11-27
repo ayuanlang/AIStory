@@ -68,9 +68,12 @@ ANALYSIS_PERSIST_FIELDS = (
 
 logger = logging.getLogger(__name__)
 
+# Section fences are [标签开始] / [标签结束]. Pipeline keys such as [占用=已结束] are not fences.
+_FENCE_LABEL = r"[^\n\[\]=＝｜|]{1,48}"
+
 _INJECTION_PATTERNS: List[tuple[str, re.Pattern[str]]] = [
-    ("injection_fence_start", re.compile(rf"\[[^\n\[\]]{{1,48}}{START}\]")),
-    ("injection_fence_end", re.compile(rf"\[[^\n\[\]]{{1,48}}{END}\]")),
+    ("injection_fence_start", re.compile(rf"\[{_FENCE_LABEL}{START}\]")),
+    ("injection_fence_end", re.compile(rf"\[{_FENCE_LABEL}{END}\]")),
     ("chatml_token", re.compile(r"<\|(?:im_start|im_end|system|assistant|user|endoftext)\|>", re.IGNORECASE)),
     ("llama_sys", re.compile(r"<<\s*/?SYS\s*>>", re.IGNORECASE)),
     ("llama_inst", re.compile(r"\[/?INST\]", re.IGNORECASE)),
