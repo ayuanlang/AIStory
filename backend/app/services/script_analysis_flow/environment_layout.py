@@ -1373,6 +1373,204 @@ def animation_script_from_model_text(text: str, *, view: str, names: Sequence[st
     return "\n".join(lines) + "\n"
 
 
+_STEP_METERS = {
+    "贴身": 0.40,
+    "一臂": 0.70,
+    "一条手臂": 0.70,
+    "两步": 1.40,
+    "三步": 2.20,
+    "五步": 3.60,
+}
+# Toward the camera, the depth axis changes by this sign. North view: north decreases.
+_TOWARD_SIGN = {"north": ("north", -1.0), "south": ("north", 1.0), "east": ("east", -1.0), "west": ("east", 1.0)}
+# Person facing the camera: their left hand, as east/north signs.
+_LEFT_HAND = {"north": (1.0, 0.0), "south": (-1.0, 0.0), "east": (0.0, -1.0), "west": (0.0, 1.0)}
+_STAND_RE = re.compile(
+    r"(?:站在|停在)(?P<host>.{1,32}?)(?P<side>靠近镜头|远离镜头)的[这那][一侧边]{1,2}"
+    r"(?:[^。]{0,80}?更(?P=side))?"
+    r"(?:[^。]{0,40}?(?P<dist>贴身|一条手臂|一臂|两步|三步|五步))?"
+)
+
+
+def _depth_span(box: Dict[str, Any], axis: str) -> float:
+    key = "along_north" if axis == "north" else "along_east"
+    return float(box.get(key) or 0.0)
+
+
+def _match_host(label: str, rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    text = str(label or "").strip()
+    if "门" in text:
+        chosen = [row for row in rows if row.get("kind") == "door" or "门" in str(row.get("name") or "")]
+    elif any(word in text for word in ("台", "桌", "案")):
+        chosen = [
+            row for row in rows
+            if row.get("kind") == "furniture" and any(word in str(row.get("name") or "") for word in ("台", "桌", "案"))
+        ]
+    elif "柜" in text:
+        chosen = [row for row in rows if "柜" in str(row.get("name") or "")]
+    else:
+        chosen = []
+    if len(chosen) == 1:
+        return chosen[0]
+    best = None
+    best_score = 0
+    for row in chosen or list(rows):
+        name = str(row.get("name") or "")
+        score = sum(2 for index in range(len(text) - 1) if text[index:index + 2] in name)
+        if score > best_score:
+            best = row
+            best_score = score
+    return best if best_score >= 2 else None
+
+
+def _stand_point(box: Dict[str, Any], view: str, side: str, dist: float) -> Tuple[float, float]:
+    axis, toward = _TOWARD_SIGN[view]
+    center = float(box.get(axis) or 0.0)
+    half = _depth_span(box, axis) / 2.0
+    if side == "靠近镜头":
+        depth = center + toward * half + toward * dist
+    else:
+        depth = center - toward * half - toward * dist
+    lateral = "east" if axis == "north" else "north"
+    east = depth if axis == "east" else float(box.get(lateral) or 0.0)
+    north = depth if axis == "north" else float(box.get(lateral) or 0.0)
+    return east, north
+
+
+def _prompt_stands(prompt: str, rows: Sequence[Dict[str, Any]], view: str) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+    start = None
+    end = None
+    for found in _STAND_RE.finditer(str(prompt or "")):
+        host = _match_host(found.group("host") or "", rows)
+        if host is None:
+            continue
+        dist = _STEP_METERS.get(found.group("dist") or "", 0.70)
+        point = _stand_point(host, view, found.group("side"), dist)
+        phrase = found.group(0)
+        if phrase.startswith("停在"):
+            end = point
+        else:
+            start = point
+    return start, end
+
+
+def apply_prompt_room(script: str, prompt: str) -> str:
+    """The storyboard's door state overrides a closed door copied from the picture."""
+    text = str(prompt or "")
+    if not re.search(r"门[^。]{0,16}半开|半开[^。]{0,16}门", text):
+        return script
+    lines: List[str] = []
+    for line in str(script or "").splitlines():
+        if "mass(" in line and ('"door"' in line or "门" in line):
+            if re.search(r'state\s*=\s*"', line):
+                line = re.sub(r'state\s*=\s*"[^"]*"', 'state="半开"', line)
+            elif re.search(r"state\s*=", line):
+                line = re.sub(r"state\s*=\s*\S+", 'state="半开"', line)
+            elif line.rstrip().endswith(")"):
+                line = line.rstrip()[:-1] + ', state="半开")'
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def lock_shot_motion(motion: str, room_script: str, prompt: str, view: str) -> str:
+    """Rewrite stands, a held prop, and the front step from the storyboard."""
+    face = str(view or "").strip().lower()
+    if face not in _TOWARD_SIGN:
+        return motion
+    rows = layout_mass_fields(room_script)
+    start, end = _prompt_stands(prompt, rows, face)
+    people = [
+        name for name in re.findall(r"CHAR:\[@[^\]]+\]", str(prompt or ""))
+        if any(str(row.get("name") or "") == name for row in rows)
+    ]
+    person = people[0] if people else ""
+    held = re.findall(r"(左手|右手)拿着\s*(PROP:\[[^\]]+\])", str(prompt or ""))
+    front = re.search(r"正前(贴身|一条手臂|一臂|两步|三步|五步)", str(prompt or ""))
+    if start is None and end is None and not held and front is None:
+        return motion
+    lines = [line for line in str(motion or "").splitlines() if line.strip()]
+    seconds = 4.0
+    cams: List[Tuple[float, float, float, float, float]] = []
+    focals: List[str] = []
+    moves: List[Tuple[str, float, float, float]] = []
+    cam_re = re.compile(
+        r"^CAM\s+t=(-?\d+(?:\.\d+)?)\s+view=(north|east|south|west)\s+"
+        r"dolly=(-?\d+(?:\.\d+)?)\s+rise=(-?\d+(?:\.\d+)?)\s+pan=(-?\d+(?:\.\d+)?)"
+        r"(?:\s+dip=(-?\d+(?:\.\d+)?))?\s*$",
+        re.I,
+    )
+    for line in lines:
+        if line.startswith("SECONDS"):
+            try:
+                seconds = float(line.split("=", 1)[1])
+            except ValueError:
+                seconds = 4.0
+            continue
+        if line.startswith("FOCAL"):
+            focals.append(line)
+            continue
+        cam = cam_re.match(line)
+        if cam:
+            dip = 0.0 if cam.group(6) is None else float(cam.group(6))
+            cams.append((float(cam.group(1)), float(cam.group(3)), float(cam.group(4)), float(cam.group(5)), dip))
+            continue
+        move = _move_from_line(line)
+        if move:
+            moves.append(move)
+    if person and (start is not None or end is not None):
+        own = [item for item in moves if item[0] == person]
+        if not own:
+            own = [(person, 0.0, 0.0, 0.0)]
+        if start is not None and end is not None and len(own) < 2:
+            own.append((person, seconds, own[0][2], own[0][3]))
+        begin = start or end
+        finish = end or start
+        t0 = own[0][1]
+        t1 = own[-1][1]
+        span = t1 - t0
+        rewritten = []
+        for _name, tick, _east, _north in own:
+            blend = 0.0 if abs(span) < 1e-6 else (tick - t0) / span
+            rewritten.append((
+                person,
+                tick,
+                begin[0] + (finish[0] - begin[0]) * blend,
+                begin[1] + (finish[1] - begin[1]) * blend,
+            ))
+        moves = [item for item in moves if item[0] != person] + rewritten
+        for hand, prop in held:
+            if not any(str(row.get("name") or "") == prop for row in rows):
+                continue
+            sign = _LEFT_HAND[face] if hand == "左手" else (-_LEFT_HAND[face][0], -_LEFT_HAND[face][1])
+            body = next(row for row in rows if row.get("name") == person)
+            piece = next(row for row in rows if row.get("name") == prop)
+            if abs(sign[0]) >= abs(sign[1]):
+                gap = float(body.get("along_east") or 0.45) / 2.0 + float(piece.get("along_east") or 0.1) / 2.0 + 0.08
+            else:
+                gap = float(body.get("along_north") or 0.25) / 2.0 + float(piece.get("along_north") or 0.05) / 2.0 + 0.08
+            offset = (sign[0] * gap, sign[1] * gap)
+            moves = [item for item in moves if item[0] != prop]
+            for _name, tick, east, north in rewritten:
+                moves.append((prop, tick, east + offset[0], north + offset[1]))
+    if front is not None and cams:
+        desired = _STEP_METERS[front.group(1)]
+        opening = max(-1.5, min(1.10, 1.40 - desired))
+        shift = opening - cams[0][1]
+        cams = [
+            (tick, max(-1.5, min(1.10, dolly + shift)), rise, pan, dip)
+            for tick, dolly, rise, pan, dip in cams
+        ]
+    out = [f"SECONDS = {seconds:.2f}", "FPS = 8"]
+    for tick, dolly, rise, pan, dip in cams:
+        out.append(
+            f"CAM t={tick:.2f} view={face} dolly={dolly:.2f} rise={rise:.2f} pan={pan:.2f} dip={dip:.0f}"
+        )
+    out.extend(focals)
+    for name, tick, east, north in moves:
+        out.append(f'MOVE "{name}" t={tick:.2f} east={east:.2f} north={north:.2f}')
+    return "\n".join(out) + "\n"
+
+
 def missing_occupant_moves(script: str, names: Sequence[str]) -> str:
     """CHAR and PROP names the animation script never moves."""
     present = set(re.findall(r'MOVE\s+"([^"]+)"', str(script or "")))

@@ -619,6 +619,58 @@ MOVE "CHAR:[@甲]" t=4 east=0.5 north=-0.2
     assert body.index("不要开篇") < 80
 
 
+def test_storyboard_stand_overrides_the_model_move():
+    from app.services.script_analysis_flow.environment_layout import (
+        animation_script_from_model_text,
+        apply_prompt_room,
+        lock_shot_motion,
+    )
+
+    room = """
+FOCAL_MM = 35
+mass("地面", "floor", east=0, north=0, along_east=8, along_north=8, height=0.04, bottom=0)
+mass("金属大门", "door", east=0, north=4, along_east=2.2, along_north=0.2, height=2.2, bottom=0, state="全关")
+mass("金属台", "furniture", east=0, north=-0.5, along_east=2.4, along_north=1.2, height=0.85, bottom=0, face="南")
+mass("CHAR:[@顾沉舟]", "person", east=0, north=-2, along_east=0.45, along_north=0.25, height=1.8, bottom=0)
+mass("PROP:[最高权限令牌]", "prop", east=0, north=-2, along_east=0.1, along_north=0.05, height=0.15, bottom=1.1)
+"""
+    prompt = (
+        "镜头在重型保险台靠近镜头的这一边，离 CHAR:[@顾沉舟] 正前三步。"
+        "CHAR:[@顾沉舟] 站在防爆重型金属门靠近镜头的这一侧的位置，更靠近镜头一条手臂，"
+        "在这扇防爆重型金属门的左右正中，站着。左手拿着 PROP:[最高权限令牌]。"
+        "防爆重型金属门开拍半开。"
+        "从靠近镜头向远离镜头走，脚步停在重型保险台远离镜头的那一侧的位置，更远离镜头一条手臂，"
+        "在这张重型保险台的左右正中，站着。"
+    )
+    patched = apply_prompt_room(room, prompt)
+    assert 'mass("金属大门"' in patched and 'state="半开"' in patched
+    assert 'state="全关"' not in patched
+    raw = """
+SECONDS = 5.00
+CAM t=0 view=north dolly=0 rise=0 pan=0 dip=0
+CAM t=5 view=north dolly=0.70 rise=0 pan=0 dip=0
+FOCAL t=0 mm=50
+FOCAL t=5 mm=50
+MOVE t=0 CHAR:[@顾沉舟] 东=0.00 北=-2.00
+MOVE t=5 CHAR:[@顾沉舟] 东=0.00 北=0.80
+MOVE t=0 PROP:[最高权限令牌] 东=0.00 北=-2.00
+MOVE t=5 PROP:[最高权限令牌] 东=0.00 北=0.80
+"""
+    parsed = animation_script_from_model_text(
+        raw,
+        view="north",
+        names=["CHAR:[@顾沉舟]", "PROP:[最高权限令牌]"],
+        seconds=5,
+    )
+    locked = lock_shot_motion(parsed, patched, prompt, "north")
+    assert 'MOVE "CHAR:[@顾沉舟]" t=0.00 east=0.00 north=3.20' in locked
+    assert 'MOVE "CHAR:[@顾沉舟]" t=5.00 east=0.00 north=0.80' in locked
+    assert 'MOVE "PROP:[最高权限令牌]" t=0.00 east=0.36 north=3.20' in locked
+    assert 'MOVE "PROP:[最高权限令牌]" t=5.00 east=0.36 north=0.80' in locked
+    assert "dolly=-0.80" in locked
+    assert "dolly=-0.10" in locked
+
+
 def test_derived_view_image_uses_the_matching_cell():
     from app.services.script_analysis_flow.environment_layout_job import _quad_cell_url
 
@@ -737,6 +789,71 @@ def test_long_lens_keeps_a_person_edge_when_they_step_closer():
         gray = Image.open(os.path.join(folder, name)).convert("L")
         dark = sum(gray.histogram()[:80])
         assert dark > 400, name
+
+
+def test_long_lens_keeps_the_prop_with_the_person():
+    import os
+    import subprocess
+    import tempfile
+
+    from PIL import Image
+
+    from app.services.script_analysis_flow.environment_layout_blender import (
+        LayoutRenderError,
+        blender_executable,
+        render_white_model,
+    )
+    try:
+        blender_executable()
+    except LayoutRenderError:
+        return
+    script = "\n".join([
+        "FOCAL_MM = 35",
+        'mass("地面", "floor", 0, 0, 8, 8, 0.04, 0)',
+        'mass("北墙", "wall", 0, 4, 8, 0.2, 3.2, 0)',
+        'mass("南墙", "wall", 0, -4, 8, 0.2, 3.2, 0)',
+        'mass("东墙", "wall", 4, 0, 0.2, 8, 3.2, 0)',
+        'mass("西墙", "wall", -4, 0, 0.2, 8, 3.2, 0)',
+        'mass("主控台", "furniture", 0, 1.5, 2.2, 0.9, 0.75, 0)',
+        'mass("CHAR:[@顾沉舟]", "person", 0, 0.7, 0.45, 0.25, 1.8, 0)',
+        'mass("PROP:[透明装甲手提箱_开态]", "prop", 0, 0.0, 0.4, 0.3, 0.2, 0.75)',
+    ])
+    motion = "\n".join([
+        "SECONDS = 2.00",
+        "FPS = 8",
+        "CAM t=0 view=north dolly=0.70 rise=0 pan=0 dip=0",
+        "CAM t=2 view=north dolly=0 rise=0 pan=0 dip=12",
+        "FOCAL t=0 mm=85",
+        "FOCAL t=2 mm=85",
+        'MOVE "CHAR:[@顾沉舟]" t=0.00 east=0.00 north=0.70',
+        'MOVE "CHAR:[@顾沉舟]" t=2.00 east=0.00 north=0.70',
+        'MOVE "PROP:[透明装甲手提箱_开态]" t=0.00 east=0.00 north=0.00',
+        'MOVE "PROP:[透明装甲手提箱_开态]" t=2.00 east=0.00 north=-0.40',
+    ])
+    binary = render_white_model(script, view="north", motion=motion)
+    import imageio_ffmpeg
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "clip.mp4")
+    with open(path, "wb") as handle:
+        handle.write(binary)
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    subprocess.run([exe, "-y", "-i", path, os.path.join(folder, "f_%04d.png")], check=True, capture_output=True)
+    frames = sorted(name for name in os.listdir(folder) if name.startswith("f_"))
+    assert len(frames) >= 8
+
+    def bands(name):
+        image = Image.open(os.path.join(folder, name)).convert("L")
+        width, height = image.size
+        pixels = list(image.getdata())
+        lower = height * 2 // 3
+        bottom = sum(1 for index, value in enumerate(pixels) if value < 80 and index // width >= lower)
+        return bottom, width, height
+
+    start_bottom, _width, _height = bands(frames[0])
+    end_bottom, _width, _height = bands(frames[-1])
+    assert start_bottom > 80
+    assert end_bottom > 80
+    assert abs(start_bottom - end_bottom) > 20
 
 
 def test_east_two_shot_keeps_both_people_while_one_walks():

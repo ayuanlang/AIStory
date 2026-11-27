@@ -41,7 +41,7 @@ description: 把这一镜的分镜提示词写成白模动画脚本。镜头、�
 
 一行一个键。SECONDS 用用户消息里的秒。FPS 固定 8。MOVE 的名字与盒子名字逐字相同，不另加引号。
 
-数字、view 和名字以用户消息为准，不要照抄下面的东和北。
+数字、view 和名字以用户消息为准，不要照抄下面的东和北。站在哪一具哪一侧、离外沿几档，由程序按这一具的外沿重写，脚本里的东和北只表示往哪一侧走。
 
 ```
 SECONDS = 5.00
@@ -50,8 +50,8 @@ CAM t=0 view=east dolly=0 rise=0 pan=0 dip=0
 CAM t=5 view=east dolly=0 rise=0 pan=0 dip=0
 FOCAL t=0 mm=24
 FOCAL t=5 mm=24
-MOVE t=0 CHAR:[@名] 东=0.00 北=1.55
-MOVE t=5 CHAR:[@名] 东=0.00 北=1.55
-MOVE t=0 CHAR:[@另一人] 东=0.00 北=-4.45
-MOVE t=5 CHAR:[@另一人] 东=0.00 北=-3.05
+MOVE t=0 CHAR:[@名] 东=0.00 北=0.00
+MOVE t=5 CHAR:[@名] 东=0.00 北=0.00
+MOVE t=0 CHAR:[@另一人] 东=0.00 北=-1.00
+MOVE t=5 CHAR:[@另一人] 东=0.00 北=1.00
 ```

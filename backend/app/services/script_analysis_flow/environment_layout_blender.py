@@ -727,6 +727,58 @@ if MOTION.strip():
             chosen = max(18.0, chosen - 3.0)
         return trial, Vector((cx, cy, loc.z)), chosen
 
+    def hold_props(loc, focus, tick, mm, dolly):
+        if float(mm) <= 36.0 and float(dolly) <= 0.2:
+            return loc, focus, mm
+        people = []
+        props = []
+        for item in MADE:
+            if not still_here(item) or item["kind"] not in {{"person", "prop"}}:
+                continue
+            east, north = box_at(item, tick)
+            center_z = item["bottom"] + item["height"] * (0.55 if item["kind"] == "person" else 0.5)
+            row = (east, north, center_z, item)
+            if item["kind"] == "person":
+                people.append(row)
+            else:
+                props.append(row)
+        if not people or not props:
+            return loc, focus, mm
+        forward = Vector((focus.x - loc.x, focus.y - loc.y, 0.0))
+        if forward.length < 1e-4:
+            forward = Vector((0.0, 1.0, 0.0))
+        else:
+            forward = forward.normalized()
+        px = sum(row[0] for row in props) / float(len(props))
+        py = sum(row[1] for row in props) / float(len(props))
+        pz = sum(row[2] for row in props) / float(len(props))
+        hx = sum(row[0] for row in people) / float(len(people))
+        hy = sum(row[1] for row in people) / float(len(people))
+        hz = sum(row[2] for row in people) / float(len(people))
+        aim = Vector((px * 0.6 + hx * 0.4, py * 0.6 + hy * 0.4, pz * 0.55 + hz * 0.45))
+        head = max(row[2] + row[3]["height"] * 0.45 for row in people)
+        low = min(row[2] - row[3]["height"] * 0.5 for row in props)
+        half_v = max(abs(head - aim.z), abs(aim.z - low)) + 0.2
+        side = Vector((-forward.y, forward.x, 0.0))
+        half_h = 0.35
+        for east, north, _cz, item in people + props:
+            wide = item["along_north"] if abs(forward.x) >= abs(forward.y) else item["along_east"]
+            lateral = abs((east - aim.x) * side.x + (north - aim.y) * side.y) + wide / 2.0
+            half_h = max(half_h, lateral + 0.15)
+        chosen = float(mm) if float(mm) <= 36.0 else min(float(mm), 35.0)
+        trial = loc
+        for _try in range(8):
+            tan_h = 18.0 / max(chosen, 1.0)
+            tan_v = 10.125 / max(chosen, 1.0)
+            dist = max(half_h / max(tan_h * 0.7, 0.05), half_v / max(tan_v * 0.7, 0.05), 1.6)
+            trial = Vector((aim.x, aim.y, loc.z)) - forward * dist
+            if not buried_in_wall(trial):
+                break
+            chosen = max(24.0, chosen - 3.0)
+            dist = max(1.6, dist - 0.35)
+            trial = Vector((aim.x, aim.y, loc.z)) - forward * dist
+        return trial, aim, chosen
+
     ticks = {{0.0, float(seconds)}}
     for fields in cams:
         try:
@@ -758,6 +810,7 @@ if MOTION.strip():
                 loc = loc + delta
                 focus = focus + delta
         loc, focus, grouped_mm = frame_group(loc, focus, tick, focal_now(tick), dolly)
+        loc, focus, held_mm = hold_props(loc, focus, tick, focal_now(tick), dolly)
         for _step in range(24):
             if not buried_in_wall(loc):
                 break
@@ -767,7 +820,7 @@ if MOTION.strip():
             forward = forward.normalized()
             loc = loc + forward * 0.12
             focus = focus + forward * 0.12
-        mm = min(focal_now(tick), grouped_mm)
+        mm = min(focal_now(tick), grouped_mm, held_mm)
         span = person_span(loc, tick)
         if span is not None and span[0] > 0.2:
             fit = span[0] * 36.0 / max(span[1] * 1.35, 0.2)

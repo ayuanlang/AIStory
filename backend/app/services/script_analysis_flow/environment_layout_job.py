@@ -528,11 +528,17 @@ async def _render_group(
                     raise
                 boxes = boxes_from_layout_script(script)[0]
 
+        if str(animate_prompt or "").strip():
+            from app.services.script_analysis_flow.environment_layout import apply_prompt_room
+
+            script = apply_prompt_room(script, animate_prompt)
+
         async def motion_for(script_text: str, view: str) -> str:
             from app.services.script_analysis_flow.environment_layout import (
                 animation_messages,
                 animation_script_from_model_text,
                 fallback_motion,
+                lock_shot_motion,
                 mass_names,
                 missing_occupant_moves,
             )
@@ -559,12 +565,13 @@ async def _render_group(
                                 usage[key] = int(usage.get(key, 0) or 0) + int(extra.get(key, 0) or 0)
                             except (TypeError, ValueError):
                                 pass
-                return animation_script_from_model_text(
+                motion = animation_script_from_model_text(
                     str((reply or {}).get("content", "") or ""),
                     view=view,
                     names=names,
                     seconds=animate_seconds,
                 )
+                return lock_shot_motion(motion, script_text, animate_prompt, view)
 
             try:
                 motion = await ask()
@@ -604,6 +611,8 @@ async def _render_group(
             if isinstance(revised, dict):
                 response = revised
             script, boxes = read_layout(str((revised or {}).get("content", "") or ""))
+            if str(animate_prompt or "").strip():
+                script = apply_prompt_room(script, animate_prompt)
             frames = await paint(script)
 
         from app.models.all_models import Entity
