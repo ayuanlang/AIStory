@@ -42,9 +42,11 @@ from app.services.episode_script_output import (  # noqa: E402,F401
 )
 from app.services.project_season import format_project_season_prompt  # noqa: E402,F401
 from app.services.episode_script_prompt import (  # noqa: E402,F401
+    assemble_trailer_call_prompts,
     build_framework_prompt_block,
     build_structured_prefill_prompt_block,
     build_trailer_generation_prompt_block,
+    build_trailer_story_packet,
     clamp_plot_title,
     format_trailer_episode_title,
     resolve_episode_generation_guidance_for_prompt,
@@ -1750,16 +1752,46 @@ async def generate_project_episode_scripts_from_global_framework(
             user_prompt += reference_plot_block + "\n"
         else:
             episode_llm_config = llm_config
-        user_prompt += (
-            "Write this trailer now. The outline, the episode plan, and this trailer's brief are already above. Do not ask for them again."
-            if call_is_trailer
-            else "Write the episode script draft now."
-        )
-
-        try:
-            sys_prompt_episode = sys_prompt.format(episode_number=idx, episode_title=ep_title)
-        except Exception:
-            sys_prompt_episode = sys_prompt
+        if call_is_trailer:
+            # The full writer skill is ~250k characters and was sent as the system
+            # prompt ahead of this story, so the model only saw the skill and asked
+            # for an outline that was already in the user message.
+            story_packet = build_trailer_story_packet(
+                project_title=project_title,
+                season_line=format_project_season_prompt(getattr(req, "season_occurrence", None), gi),
+                episode_from=int(ep_data.get("trailer_episode_from") or 1),
+                episode_to=int(ep_data.get("trailer_episode_to") or target_n or 1),
+                focus=str(ep_data.get("trailer_focus") or ""),
+                extra_notes=str(req.extra_notes or ""),
+                prefill_source=gi_story_input,
+                framework_md=global_md,
+                character_canon_md=character_canon_md,
+                relationships=relationships,
+            )
+            trailer_rules = "\n\n".join(
+                part.strip()
+                for part in (
+                    series_ip_block,
+                    trailer_block,
+                    episode_product_specs_block,
+                    script_title_policy_block,
+                    generation_scope_block,
+                    episode_title_policy_block,
+                )
+                if str(part or "").strip()
+            )
+            sys_prompt_episode, user_prompt = assemble_trailer_call_prompts(
+                story_packet=story_packet,
+                trailer_rules=trailer_rules,
+                writer_skill=sys_prompt,
+                reference_block=reference_plot_block,
+            )
+        else:
+            user_prompt += "Write the episode script draft now."
+            try:
+                sys_prompt_episode = sys_prompt.format(episode_number=idx, episode_title=ep_title)
+            except Exception:
+                sys_prompt_episode = sys_prompt
 
         if billing_service.is_token_pricing(db, "llm_chat", provider, model):
             est = billing_service.estimate_reserve_tokens_from_messages(

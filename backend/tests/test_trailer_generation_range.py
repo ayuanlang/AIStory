@@ -2,8 +2,11 @@
 import pytest
 
 from app.services.episode_script_prompt import (
+    TRAILER_CALL_BUDGET_CHARS,
+    assemble_trailer_call_prompts,
     build_framework_prompt_block,
     build_structured_prefill_prompt_block,
+    build_trailer_story_packet,
     dedupe_framework_against_prefill,
     build_trailer_generation_prompt_block,
     clamp_plot_title,
@@ -223,3 +226,53 @@ def test_series_ip_note_uses_the_same_range():
     assert "核心建置" in note
     assert "人物弧光" in note
     assert "世界背景" in note
+
+
+def test_trailer_call_puts_story_ahead_of_the_writer_skill():
+    story = build_trailer_story_packet(
+        project_title="雨夜",
+        season_line="季节=秋",
+        episode_from=1,
+        episode_to=4,
+        focus="",
+        extra_notes="",
+        prefill_source={},
+        framework_md="EP01 林夏在码头交出令牌。",
+        character_canon_md="林夏",
+        relationships="",
+    )
+    skill = "# 顶级剧本分集执笔\n" + ("规则。\n" * 4000)
+    skill += "## 输出格式\n# {episode_number}-{episode_title}\n"
+    system, user = assemble_trailer_call_prompts(
+        story_packet=story,
+        trailer_rules="【预告片生成 / Trailer — HIGHEST PRIORITY】\n取材范围=第1集到第4集。",
+        writer_skill=skill,
+    )
+    assert "EP01 林夏在码头交出令牌。" in user
+    assert user.index("【已注入的故事与分集输入】") < user.index("顶级剧本分集执笔")
+    assert user.index("EP01 林夏在码头交出令牌。") < user.index("顶级剧本分集执笔")
+    assert "本集集号=预告片" in user
+    assert "补充要求=无" in user
+    assert "# 预告-{不超过8字的剧情短题}" in user
+    assert "# {episode_number}-{episode_title}" not in user
+    assert len(system) + len(user) <= TRAILER_CALL_BUDGET_CHARS
+    assert "禁止回复「尚未提供」" in system
+    assert len(system) < 2000
+
+
+def test_trailer_call_keeps_story_when_the_skill_alone_exceeds_the_budget():
+    story = build_trailer_story_packet(
+        project_title="雨夜",
+        episode_from=1,
+        episode_to=2,
+        framework_md="唯一情节锚点：码头交牌。",
+    )
+    skill = "规则" * 200000
+    system, user = assemble_trailer_call_prompts(
+        story_packet=story,
+        trailer_rules="侧重点规则" * 5000,
+        writer_skill=skill,
+    )
+    assert user.startswith("【已注入的故事与分集输入】")
+    assert "唯一情节锚点：码头交牌。" in user
+    assert len(system) + len(user) <= TRAILER_CALL_BUDGET_CHARS

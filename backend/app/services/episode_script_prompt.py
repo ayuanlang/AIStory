@@ -377,6 +377,159 @@ def format_trailer_episode_title(
     return "·".join(parts)
 
 
+# The writer skill alone is about 250k characters. Sent first, it fills a 128k
+# context window before the story is read, and the model asks for an outline it
+# already had. Trailer calls keep the injected story, then as many rules as fit.
+TRAILER_CALL_BUDGET_CHARS = 96000
+
+
+def trailer_call_system_prompt() -> str:
+    """Short system turn. The story lives in the user turn, ahead of the rules."""
+    return (
+        "你正在写一条预告片，不是在检查提示词是否到齐。\n"
+        "用户消息开头的【已注入的故事与分集输入】就是全局故事大纲、分集规划和本集集号。\n"
+        "本集集号=预告片。不要上一集正文，不要 EMERGENCY_RECOVERY_BLOCK。没有它们不是缺口。\n"
+        "禁止回复「尚未提供」。禁止要求用户再贴大纲、分集规划、集号或本集生成指导。禁止把停笔说明当成成稿。\n"
+        "读完已注入的大纲后直接写这条预告。\n"
+        "正式剧本草稿放进 [EPISODE_SCRIPT_OUTPUT_START] 与 [EPISODE_SCRIPT_OUTPUT_END]。\n"
+        "OUTPUT 第一个非空行是 # 预告-{不超过8字的剧情短题}。\n"
+    )
+
+
+def build_trailer_story_packet(
+    *,
+    project_title: str,
+    season_line: str = "",
+    episode_from: int,
+    episode_to: int,
+    focus: str = "",
+    extra_notes: str = "",
+    prefill_source: Any = None,
+    framework_md: str = "",
+    character_canon_md: str = "",
+    relationships: str = "",
+) -> str:
+    """The three inputs the writer asked for, labeled and placed before any rules."""
+    focus_text = str(focus or "").strip()
+    notes = str(extra_notes or "").strip()
+    lines = [
+        "【已注入的故事与分集输入】",
+        "以下就是全局故事大纲、分集规划和本集集号。已经附上。不要再向用户索取。",
+        "本集集号=预告片。这不是正片的一集。",
+        f"取材范围=第{int(episode_from)}集到第{int(episode_to)}集。",
+        f"侧重点={focus_text or '未指定'}",
+        f"补充要求={notes or '无。按已注入的大纲写。'}",
+        f"项目名={str(project_title or '').strip() or '未命名'}",
+    ]
+    season = str(season_line or "").strip()
+    if season:
+        lines.append(season)
+    parts = ["\n".join(lines)]
+    if structured_prefill_has_text(prefill_source):
+        prefill = "\n\n".join(
+            chunk
+            for chunk in (
+                format_story_creative_input_block(prefill_source).strip(),
+                format_outline_registry_block(prefill_source).strip(),
+            )
+            if chunk
+        ).strip()
+        if prefill:
+            parts.append("【结构化预填】\n" + prefill)
+    framework = str(framework_md or "").strip()
+    if framework:
+        parts.append("【全局故事大纲】【分集规划】\n" + framework)
+    canon = str(character_canon_md or "").strip()
+    if canon:
+        parts.append("【角色】\n" + canon)
+    relation = str(relationships or "").strip()
+    if relation:
+        parts.append("【人物关系】\n" + relation)
+    return "\n\n".join(parts).strip() + "\n"
+
+
+def _split_writer_skill_for_trailer(skill: str) -> tuple[str, str, str]:
+    """Opening contract, the long middle, then the output format."""
+    text = str(skill or "").strip()
+    if not text:
+        return "", "", ""
+    lines = text.splitlines()
+    raw_head = "\n".join(lines[:40])
+    head = raw_head.strip()
+    offset = len(raw_head)
+    if offset < len(text) and text[offset:offset + 1] == "\n":
+        offset += 1
+    marker = "## 输出格式"
+    idx = text.find(marker)
+    if idx < 0 or idx < offset:
+        return head, text[offset:].strip(), ""
+    tail = text[idx:].strip().replace(
+        "# {episode_number}-{episode_title}",
+        "# 预告-{不超过8字的剧情短题}",
+    )
+    return head, text[offset:idx].strip(), tail
+
+
+def _fit_segments(segments: list[str], room: int) -> str:
+    """Keep earlier segments whole. The last one that still fits may be shortened."""
+    kept: list[str] = []
+    used = 0
+    for segment in segments:
+        text = str(segment or "").strip()
+        if not text:
+            continue
+        gap = 2 if kept else 0
+        if used + gap + len(text) <= room:
+            kept.append(text)
+            used += gap + len(text)
+            continue
+        remain = room - used - gap - 40
+        if remain > 200:
+            kept.append(text[:remain].rstrip() + "\n【后部省略。已注入的大纲足够动笔。】")
+        elif not kept:
+            kept.append(text[: max(0, room - 40)].rstrip() + "\n【后部省略。已注入的大纲足够动笔。】")
+        break
+    return "\n\n".join(kept).strip()
+
+
+def assemble_trailer_call_prompts(
+    *,
+    story_packet: str,
+    trailer_rules: str,
+    writer_skill: str,
+    reference_block: str = "",
+    budget_chars: int = TRAILER_CALL_BUDGET_CHARS,
+) -> tuple[str, str]:
+    """System stays short. User starts with the story. Later rules are dropped first."""
+    system = trailer_call_system_prompt()
+    story = str(story_packet or "").strip()
+    if not story:
+        story = (
+            "【已注入的故事与分集输入】\n"
+            "本集集号=预告片。大纲正文为空。仍直接写这条预告，不要向用户索取。\n"
+        )
+    head, middle, output_format = _split_writer_skill_for_trailer(writer_skill)
+    if head or output_format or middle:
+        head = (
+            "【执笔规则摘录】故事和分集输入已经在本条开头。不要停下来索取输入。\n\n"
+            + head
+        ).strip()
+    closing = "现在写这条预告。大纲、分集规划和集号已经在本条开头，不要再向用户索取。\n"
+    room = max(4000, int(budget_chars) - len(system) - len(closing) - 2)
+    body = _fit_segments(
+        [
+            story,
+            str(trailer_rules or ""),
+            head,
+            output_format,
+            str(reference_block or ""),
+            middle,
+        ],
+        room,
+    )
+    return system, f"{body}\n\n{closing}"
+
+
 def build_trailer_generation_prompt_block(
     *,
     focus: Optional[str] = None,
