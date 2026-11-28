@@ -122,6 +122,78 @@ def test_persist_overwrites_old_adaptation_and_stage_outputs():
     assert "新剧本正文" in outputs["stages"]["stage1"]["outputs"]["scene_split"]["content"]
 
 
+def test_later_node_persist_keeps_marked_orchestration():
+    unmarked = "文戏增强已完成。\n这一拍没有场标记。"
+    episode = SimpleNamespace(
+        id=1,
+        ai_scene_analysis_adaptation=OLD_SCRIPT,
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "key": "stage1",
+                        "outputs": {
+                            "adapted_script": {"key": "adapted_script", "content": OLD_SCRIPT},
+                            "raw_text": {"key": "raw_text", "content": OLD_SCRIPT},
+                            "scene_split": {"key": "scene_split", "content": OLD_SCRIPT},
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    persist_script_optimization_stage(
+        db=_DummyDb(),
+        episode=episode,
+        result_content=unmarked,
+        node_output_key="scene_subskills",
+    )
+    outputs = json.loads(episode.ai_stage_outputs)["stages"]["stage1"]["outputs"]
+    assert "旧剧本正文" in episode.ai_scene_analysis_adaptation
+    assert "[SCENE_START:EP01_SC01]" in outputs["raw_text"]["content"]
+    assert "[SCENE_START:EP01_SC01]" in outputs["adapted_script"]["content"]
+    assert "[SCENE_START:EP01_SC01]" in outputs["scene_split"]["content"]
+    assert outputs["scene_subskills"]["content"] == unmarked
+    assert "旧剧本正文" not in outputs["scene_subskills"]["content"]
+
+
+def test_unmarked_scene_split_persist_does_not_drop_existing_markers():
+    unmarked = "没有场标记的后稿"
+    episode = SimpleNamespace(
+        id=1,
+        ai_scene_analysis_adaptation=OLD_SCRIPT,
+        ai_stage_outputs=json.dumps(
+            {
+                "version": 1,
+                "stages": {
+                    "stage1": {
+                        "key": "stage1",
+                        "outputs": {
+                            "adapted_script": {"key": "adapted_script", "content": OLD_SCRIPT},
+                            "raw_text": {"key": "raw_text", "content": OLD_SCRIPT},
+                            "scene_split": {"key": "scene_split", "content": OLD_SCRIPT},
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
+    persist_script_optimization_stage(
+        db=_DummyDb(),
+        episode=episode,
+        result_content=unmarked,
+        node_output_key="scene_split",
+    )
+    outputs = json.loads(episode.ai_stage_outputs)["stages"]["stage1"]["outputs"]
+    assert "[SCENE_START:EP01_SC01]" in episode.ai_scene_analysis_adaptation
+    assert "[SCENE_START:EP01_SC01]" in outputs["raw_text"]["content"]
+    assert "[SCENE_START:EP01_SC01]" in outputs["scene_split"]["content"]
+    assert unmarked not in outputs["scene_split"]["content"]
+
+
 def test_persist_keeps_existing_scene_subskill_results():
     drama_block = (
         "[SCENE_START:EP01_SC01]\n"

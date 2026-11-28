@@ -852,6 +852,21 @@ def lookup_persisted_scene_subskill_steps(
     return {}
 
 
+def _prefer_marked_scene_text(incoming: Any, *previous: Any) -> str:
+    """Keep a 统筹 body that still has scene markers when a later write drops them.
+
+    A new body that itself has scene markers still replaces the previous one.
+    """
+    nxt = str(incoming or "")
+    if scene_ids_from_split_text(nxt):
+        return nxt
+    for item in previous:
+        prev = str(item or "")
+        if scene_ids_from_split_text(prev):
+            return prev
+    return nxt
+
+
 def _patch_episode_stage1_outputs(
     episode: Episode,
     *,
@@ -860,6 +875,7 @@ def _patch_episode_stage1_outputs(
     visual_backfill_json: str = "",
     node_output_key: str = "",
     saved_at: str = "",
+    node_body: Optional[str] = None,
 ) -> None:
     raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
     try:
@@ -881,20 +897,24 @@ def _patch_episode_stage1_outputs(
         outputs = {}
         stage1["outputs"] = outputs
     raw_slot = outputs.get("raw_text") if isinstance(outputs.get("raw_text"), dict) else {}
+    existing_raw = str(raw_slot.get("content") or "") if isinstance(raw_slot, dict) else ""
+    stored_raw = _prefer_marked_scene_text(raw_text, existing_raw)
     outputs["raw_text"] = {
         **raw_slot,
         "key": "raw_text",
         "kind": raw_slot.get("kind") or "text",
         "title": raw_slot.get("title") or "第一阶段完整结果",
-        "content": str(raw_text or ""),
+        "content": stored_raw,
     }
     adapted_slot = outputs.get("adapted_script") if isinstance(outputs.get("adapted_script"), dict) else {}
+    existing_adapted = str(adapted_slot.get("content") or "") if isinstance(adapted_slot, dict) else ""
+    stored_adapted = _prefer_marked_scene_text(adapted_script, existing_adapted)
     outputs["adapted_script"] = {
         **adapted_slot,
         "key": "adapted_script",
         "kind": adapted_slot.get("kind") or "markdown",
         "title": adapted_slot.get("title") or "优化后剧本",
-        "content": str(adapted_script or ""),
+        "content": stored_adapted,
     }
     visual_slot = outputs.get("project_visual_backfill") if isinstance(outputs.get("project_visual_backfill"), dict) else {}
     outputs["project_visual_backfill"] = {
@@ -907,12 +927,16 @@ def _patch_episode_stage1_outputs(
     stable_node_key = str(node_output_key or "").strip()
     if stable_node_key:
         node_slot = outputs.get(stable_node_key) if isinstance(outputs.get(stable_node_key), dict) else {}
+        node_source = str(raw_text if node_body is None else node_body or "")
+        if stable_node_key == "scene_split":
+            existing_split = str(node_slot.get("content") or "") if isinstance(node_slot, dict) else ""
+            node_source = _prefer_marked_scene_text(node_source, existing_split)
         node_payload = {
             **node_slot,
             "key": stable_node_key,
             "kind": node_slot.get("kind") or "markdown",
             "title": node_slot.get("title") or stable_node_key,
-            "content": str(raw_text or ""),
+            "content": node_source,
         }
         written_at = str(saved_at or "").strip()
         if written_at:
@@ -1024,22 +1048,32 @@ def persist_script_optimization_stage(
         from app.core.persist_version import new_persisted_at
 
         slot_stamp = new_persisted_at() if persist_key in _RESULT_SLOT_CLOCK_KEYS else ""
+        existing_obj = _load_stage_outputs_obj(episode)
+        existing_raw = str(_stage1_slot_content(existing_obj, "raw_text") or "")
+        existing_adapted_slot = str(_stage1_slot_content(existing_obj, "adapted_script") or "")
+        existing_split = str(_stage1_slot_content(existing_obj, "scene_split") or "")
+        existing_adapt = str(getattr(episode, "ai_scene_analysis_adaptation", "") or "")
         if persist_key in {"scene_subskills", "scene_subskill_results"}:
             from app.services.script_analysis_flow.environment_reuse import (
                 script_has_environment_plan_payload,
             )
 
-            existing_adapt = str(getattr(episode, "ai_scene_analysis_adaptation", "") or "")
             if (
                 not script_has_environment_plan_payload(adapted_script)
                 and script_has_environment_plan_payload(existing_adapt)
             ):
                 adapted_script = existing_adapt
             existing_visual = str(
-                _stage1_slot_content(_load_stage_outputs_obj(episode), "project_visual_backfill") or ""
+                _stage1_slot_content(existing_obj, "project_visual_backfill") or ""
             ).strip()
             if not visual_backfill_json and existing_visual:
                 visual_backfill_json = existing_visual
+        # A later node may persist a body with no scene markers. That must not
+        # replace the 统筹 text that still has them. A new marked body still replaces.
+        marked_previous = (existing_adapt, existing_adapted_slot, existing_raw, existing_split)
+        node_body = raw_text
+        raw_text = _prefer_marked_scene_text(raw_text, *marked_previous)
+        adapted_script = _prefer_marked_scene_text(adapted_script, *marked_previous)
         episode.ai_scene_analysis_adaptation = adapted_script
         _patch_episode_stage1_outputs(
             episode,
@@ -1048,6 +1082,7 @@ def persist_script_optimization_stage(
             visual_backfill_json=visual_backfill_json,
             node_output_key=node_output_key,
             saved_at=slot_stamp,
+            node_body=node_body,
         )
         db.commit()
     try:

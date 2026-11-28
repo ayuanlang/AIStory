@@ -5118,6 +5118,22 @@ const listSceneMarkerIds = (text) => {
     return ids;
 };
 
+const textHasSceneStartMarker = (text) => listSceneMarkerIds(text).length > 0;
+
+// A later save with no scene markers must not replace 统筹 text that still has them.
+// A new body that itself has scene markers still replaces. Full restart passes
+// allowRestore=false so a cleared run does not resurrect the previous draft.
+const keepMarkedSceneText = (incoming, previousList, { allowRestore = true } = {}) => {
+    const next = String(incoming || '').trim();
+    if (!allowRestore || textHasSceneStartMarker(next)) return next;
+    const previous = Array.isArray(previousList) ? previousList : [previousList];
+    for (const item of previous) {
+        const prev = String(item || '').trim();
+        if (textHasSceneStartMarker(prev)) return prev;
+    }
+    return next;
+};
+
 const normalizeStageEcho = (text) => String(text || '')
     .replace(/<!--\s*script_hash:[^>]*-->/gi, '')
     .trim();
@@ -14738,12 +14754,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ...collectStage1NodeOutputsFromSlotMap(persistedNodeOutputs),
             ...collectStage1NodeOutputsFromSlotMap(stage1NodeOutputs),
         };
+        const allowMarkedRestore = !analysisFullRestartGateRef.current;
+        const markedScenePrevious = [
+            persistedStage1Outputs?.raw_text?.content,
+            persistedStage1Outputs?.adapted_script?.content,
+            persistedStage1Outputs?.scene_split?.content,
+            safePersistedAdaptationText,
+        ];
+        const keptStage1RawText = keepMarkedSceneText(
+            resolvedStage1RawText,
+            markedScenePrevious,
+            { allowRestore: allowMarkedRestore }
+        );
+        const keptStage1AdaptedScript = keepMarkedSceneText(
+            stage1AdaptedScript,
+            markedScenePrevious,
+            { allowRestore: allowMarkedRestore }
+        );
         const stage1Outputs = {
             adapted_script: {
                 key: 'adapted_script',
                 kind: 'markdown',
                 title: '优化后剧本',
-                content: stage1AdaptedScript,
+                content: keptStage1AdaptedScript,
             },
             project_visual_backfill: {
                 key: 'project_visual_backfill',
@@ -14755,7 +14788,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 key: 'raw_text',
                 kind: 'text',
                 title: '第一阶段完整结果',
-                content: resolvedStage1RawText,
+                content: keptStage1RawText,
             },
         };
         Object.entries(mergedNodeOutputs).forEach(([key, content]) => {
@@ -14767,13 +14800,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const previousSaved = previous && typeof previous === 'object' && !Array.isArray(previous)
                 ? String(previous.saved_at || '').trim()
                 : '';
+            const slotContent = key === 'scene_split'
+                ? keepMarkedSceneText(
+                    content,
+                    [previousContent, persistedStage1Outputs?.scene_split?.content],
+                    { allowRestore: allowMarkedRestore }
+                )
+                : String(content || '').trim();
+            if (!slotContent) return;
             const slot = {
                 key,
                 kind: key === 'scene_subskill_results' || key === 'scene_subskill_persisted_at' ? 'json' : 'markdown',
                 title: key,
-                content,
+                content: slotContent,
             };
-            if (previousSaved && previousContent === String(content || '').trim()) {
+            if (previousSaved && previousContent === slotContent) {
                 slot.saved_at = previousSaved;
             }
             stage1Outputs[key] = slot;
@@ -14811,7 +14852,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             key: 'adapted_script',
                             kind: 'markdown',
                             title: '优化后剧本',
-                            content: stage1AdaptedScript,
+                            content: keptStage1AdaptedScript,
                         },
                         project_visual_backfill: {
                             key: 'project_visual_backfill',
@@ -15023,12 +15064,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const outputs = stage1.outputs && typeof stage1.outputs === 'object'
                     ? stage1.outputs
                     : (stage1.outputs = {});
+                const allowMarkedRestore = !analysisFullRestartGateRef.current;
+                const markedScenePrevious = [
+                    outputs.raw_text?.content,
+                    outputs.adapted_script?.content,
+                    outputs.scene_split?.content,
+                    activeEpisode?.ai_scene_analysis_adaptation,
+                ];
                 if (liveAdapted) {
-                    ensureOutputSlot(outputs, 'adapted_script', { kind: 'markdown', title: '优化后剧本' }).content = liveAdapted;
+                    ensureOutputSlot(outputs, 'adapted_script', { kind: 'markdown', title: '优化后剧本' }).content = keepMarkedSceneText(
+                        liveAdapted,
+                        markedScenePrevious,
+                        { allowRestore: allowMarkedRestore }
+                    );
                 }
                 if (liveRaw) {
-                    ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = liveRaw;
-                    const liveVisualBackfill = extractProjectVisualBackfillJsonText(liveRaw);
+                    const keptLiveRaw = keepMarkedSceneText(
+                        liveRaw,
+                        markedScenePrevious,
+                        { allowRestore: allowMarkedRestore }
+                    );
+                    ensureOutputSlot(outputs, 'raw_text', { kind: 'text', title: '第一阶段完整结果' }).content = keptLiveRaw;
+                    const liveVisualBackfill = extractProjectVisualBackfillJsonText(keptLiveRaw);
                     if (parseVisualBackfillGlobalStyle(liveVisualBackfill)) {
                         ensureOutputSlot(outputs, 'project_visual_backfill', { kind: 'json', title: '全局风格' }).content = liveVisualBackfill;
                     }
@@ -16385,6 +16442,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const fresh = String(freshSlots[key] || '').trim();
                         const live = String(liveSlots[key] || '').trim();
                         if (fresh && live && fresh === live && incomingValue !== fresh) return;
+                        if (
+                            key === 'scene_split'
+                            && !analysisFullRestartGateRef.current
+                            && textHasSceneStartMarker(fresh)
+                            && !textHasSceneStartMarker(incomingValue)
+                        ) return;
                     }
                     accepted[key] = incomingValue;
                 });
@@ -16404,6 +16467,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const live = String(liveSlots[key] || '').trim();
                     const pinnedValue = String(pinnedText || '').trim();
                     if (fresh && live && fresh === live && fresh !== pinnedValue) return;
+                    if (
+                        key === 'scene_split'
+                        && !analysisFullRestartGateRef.current
+                        && textHasSceneStartMarker(fresh)
+                        && !textHasSceneStartMarker(pinnedValue)
+                    ) return;
                     if (pinnedValue) pinApply[key] = pinnedValue;
                 });
                 mergedNodeOutputs = {
@@ -16486,8 +16555,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const extractedAdaptation = canExtractStage1Adaptation
                         ? String(extractStage1AdaptedScriptBody(effectiveStage1RawText) || '').trim()
                         : '';
-                    const adaptationValue = extractedAdaptation
-                        || (looksLikeSceneMarkdownTable ? '' : effectiveStage1RawText);
+                    const adaptationValue = keepMarkedSceneText(
+                        extractedAdaptation
+                            || (looksLikeSceneMarkdownTable ? '' : effectiveStage1RawText),
+                        [
+                            activeEpisode?.ai_scene_analysis_adaptation,
+                            freshStage1Outputs?.adapted_script?.content,
+                            freshStage1Outputs?.raw_text?.content,
+                            freshStage1Outputs?.scene_split?.content,
+                        ],
+                        { allowRestore: !analysisFullRestartGateRef.current }
+                    );
                     if (adaptationValue) {
                         setAdaptationText(adaptationValue);
                     }
@@ -16546,11 +16624,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const persistedAdaptationValue = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
                 const persistedAdaptationLooksLikeSceneTable = looksLikeSceneMarkdownTableText(persistedAdaptationValue);
                 // A new Stage 1 payload must replace the previous episode copy; never keep stale adaptation.
-                const adaptationValue = extractedAdaptationValue
-                    || (nextLooksLikeStage1Script ? String(adaptationSourceText || '').trim() : '')
-                    || (looksLikeSceneMarkdownTable || persistedAdaptationLooksLikeSceneTable || trustLiveDownstreamOnly
-                        ? ''
-                        : persistedAdaptationValue);
+                // A later node that no longer has scene markers must not drop the 统筹 copy.
+                const adaptationValue = keepMarkedSceneText(
+                    extractedAdaptationValue
+                        || (nextLooksLikeStage1Script ? String(adaptationSourceText || '').trim() : '')
+                        || (looksLikeSceneMarkdownTable || persistedAdaptationLooksLikeSceneTable || trustLiveDownstreamOnly
+                            ? ''
+                            : persistedAdaptationValue),
+                    [
+                        persistedAdaptationValue,
+                        freshStage1Outputs?.adapted_script?.content,
+                        freshStage1Outputs?.raw_text?.content,
+                        freshStage1Outputs?.scene_split?.content,
+                    ],
+                    { allowRestore: !analysisFullRestartGateRef.current }
+                );
 
                 const normalizedSubjectIndexValue = extractPureSubjectIndexText(
                     subjectIndexValue || liveSubjectIndexText
