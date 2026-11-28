@@ -63,6 +63,11 @@ def test_prompt_locks_range_and_focus():
     assert "看懂这一节" in block
     assert "禁止画面式描述" in block
     assert "最终 Boss 的真面目可以入选" in block
+    assert "也可以选全集高光" in block
+    assert "高光部分优先选择 AI 优势" in block
+    assert "由剪辑裁" in block
+    assert "信念对撞" in block
+    assert "不收成只有铺垫" in block
     assert "侧重点不写进标题" in block
     assert "不超过 8 字" in block
     assert "## 预告片框架规划落点" in block
@@ -73,9 +78,11 @@ def test_prompt_locks_range_and_focus():
 def test_prompt_without_focus_stays_balanced():
     block = build_trailer_generation_prompt_block(episode_from=1, episode_to=4)
     assert "侧重点=未指定" in block
+    assert "娱乐时间最重" in block
     assert "高潮选段" in block
     assert "看懂这一节" in block
     assert "跳到另一节" in block
+    assert "由剪辑裁" in block
     assert "16–32" not in block
 
 
@@ -165,6 +172,8 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "看懂这一节" in trailer
     assert "跨距" in trailer
     assert "原句开口" in trailer
+    assert "信念对撞" in trailer
+    assert "由剪辑裁" in trailer
     assert "16–32" not in trailer
     assert "已锁救猫咪拍" in episode
     assert "说者与听者的微动作和表情" in episode
@@ -175,6 +184,7 @@ def test_prefill_is_required_input_and_trailer_keeps_length():
     assert "8000 字" in block
     assert "看懂这一节" in block
     assert "宿主" in block
+    assert "信念对撞" in block
     assert "16–32" not in block
 
 
@@ -224,6 +234,8 @@ def test_series_ip_note_uses_the_same_range():
     assert "核心建置" in note
     assert "人物弧光" in note
     assert "世界背景" in note
+    assert "全集高光" in note
+    assert "信念对撞" in note
 
 
 def test_trailer_call_puts_story_ahead_of_the_writer_skill():
