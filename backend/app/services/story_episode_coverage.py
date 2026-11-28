@@ -48,6 +48,22 @@ def complete_episode_blocks(text: str) -> Dict[int, str]:
     return found
 
 
+def closed_episode_numbers_in_order(text: str) -> List[int]:
+    """Closed episode numbers in the order their START markers appear."""
+    source = str(text or "")
+    numbers: List[int] = []
+    for match in _START_RE.finditer(source):
+        number = int(match.group(1))
+        if _end_re(number).search(source, match.end()):
+            numbers.append(number)
+    return numbers
+
+
+def episode_blocks_need_sort(text: str) -> bool:
+    numbers = closed_episode_numbers_in_order(text)
+    return numbers != sorted(numbers)
+
+
 def missing_episode_numbers(text: str, planned: int) -> List[int]:
     try:
         total = int(planned)
@@ -96,6 +112,14 @@ def splice_episode_blocks(base: str, addition: str) -> str:
     if output_end:
         return stripped[: output_end.start()].rstrip() + "\n\n" + chunk + "\n\n" + stripped[output_end.start() :]
     return stripped.rstrip() + "\n\n" + chunk + "\n"
+
+
+def order_episode_blocks(text: str) -> str:
+    """Put closed episode blocks in episode-number order. Already ordered text stays as written."""
+    source = str(text or "")
+    if not episode_blocks_need_sort(source):
+        return source
+    return splice_episode_blocks(source, "")
 
 
 def _neighbor_numbers(blocks: Dict[int, str], batch: List[int]) -> Tuple[Optional[int], Optional[int], List[int]]:
@@ -245,7 +269,7 @@ async def ensure_story_episode_blocks(
     Two rounds in a row that add no block still stop and raise. A canceled task stops
     before the next model call.
     """
-    current = str(markdown or "")
+    current = order_episode_blocks(str(markdown or ""))
     added_usage: Dict[str, Any] = {}
     try:
         planned = int(episodes_count)

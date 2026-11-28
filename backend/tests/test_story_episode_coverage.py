@@ -6,7 +6,9 @@ from app.schemas.episode_requests import StoryGeneratorRequest, story_generator_
 from app.services.story_episode_coverage import (
     build_gap_fill_user_prompt,
     ensure_story_episode_blocks,
+    episode_blocks_need_sort,
     missing_episode_numbers,
+    order_episode_blocks,
     splice_episode_blocks,
 )
 
@@ -129,6 +131,38 @@ def test_story_generator_payload_drops_outline_check_fields():
     assert payload["episodes_count"] == 3
     assert "check_episode_outlines" not in payload
     assert "existing_outline_md" not in payload
+
+
+def test_completeness_check_sorts_closed_blocks_before_looking_for_gaps():
+    shuffled = """[STORY_DNA_OUTPUT_START]
+## 9) 分集规划
+[EPISODE_BLOCK_START:EP03]
+- EP03 正文
+[EPISODE_BLOCK_END:EP03]
+[EPISODE_BLOCK_START:EP01]
+- EP01 正文
+[EPISODE_BLOCK_END:EP01]
+[EPISODE_BLOCK_START:EP02]
+- EP02 正文
+[EPISODE_BLOCK_END:EP02]
+### Episode Coverage Audit
+Planned:3
+[STORY_DNA_OUTPUT_END]
+"""
+    assert episode_blocks_need_sort(shuffled)
+    ordered = order_episode_blocks(shuffled)
+    assert ordered.index("EP01") < ordered.index("EP02") < ordered.index("EP03")
+    assert ordered.index("[EPISODE_BLOCK_END:EP03]") < ordered.index("Episode Coverage Audit")
+    assert not episode_blocks_need_sort(ordered)
+    assert order_episode_blocks(ordered) == ordered
+
+    async def _run():
+        return await ensure_story_episode_blocks(shuffled, episodes_count=3, llm_config={})
+
+    merged, usage = asyncio.run(_run())
+    assert merged.index("EP01") < merged.index("EP02") < merged.index("EP03")
+    assert missing_episode_numbers(merged, 3) == []
+    assert usage == {}
 
 
 def test_missing_ignores_summary_without_block_markers():

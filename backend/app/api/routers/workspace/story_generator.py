@@ -157,15 +157,35 @@ async def generate_project_story_dna_global(
         from app.services.story_episode_coverage import (  # noqa: E402
             complete_episode_blocks,
             drop_incomplete_episode_tail,
+            episode_blocks_need_sort,
             missing_episode_numbers,
+            order_episode_blocks,
         )
 
         outline_for_check = drop_incomplete_episode_tail(
             str(getattr(req, "existing_outline_md", None) or gi_existing.get("story_dna_global_md") or "")
         )
+        reordered_outline = episode_blocks_need_sort(outline_for_check)
+        if reordered_outline:
+            outline_for_check = order_episode_blocks(outline_for_check)
         if not complete_episode_blocks(outline_for_check):
             raise HTTPException(status_code=400, detail="分集大纲里没有已闭合的集，请先生成分集大纲。")
         if not missing_episode_numbers(outline_for_check, int(episodes_count)):
+            if reordered_outline:
+                project = db.merge(project)
+                gi = dict(project.global_info or {})
+                gi["story_dna_global_md"] = outline_for_check
+                gi["story_dna_global_updated_at"] = now_bj_iso()
+                project.global_info = gi
+                db.add(project)
+                db.commit()
+                db.refresh(project)
+                from app.core.persist_version import (  # noqa: E402
+                    STORY_OUTLINE_PERSISTED_AT,
+                    safe_stamp_project_persisted_at,
+                )
+
+                safe_stamp_project_persisted_at(db, project, STORY_OUTLINE_PERSISTED_AT)
             try:
                 project.cover_image = get_project_cover_image(db, project.id)
             except Exception:
