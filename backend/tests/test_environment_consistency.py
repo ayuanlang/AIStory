@@ -4,6 +4,8 @@ from app.services.script_analysis_flow.environment_consistency import (
     apply_consistency_writes,
     audit_front_double,
     seal_cell_edit_instruction,
+    drop_vague_facing_sentences,
+    specify_facing_edits,
     audit_piece_count_reconciliation,
     audit_street_end_phrases,
     audit_wall_corner_span,
@@ -1000,10 +1002,11 @@ def test_white_model_is_a_facing_reference_for_the_quad():
     system = messages[0]["content"]
     assert "另附白模图" in system
     assert "主体朝向" in system
-    assert "按白模对应格里这一具的朝向改原图对应格" in system
+    assert "哪一格、哪一具、这一格改成什么样" in system
+    assert "不写「都跟对应格」" in system
+    assert "只写「改某一格的某一具。」就结束，不能停在主体名" in system
     assert "白模四宫" in system
     assert "左上望北" in system
-    assert "长短边等朝向与白模不一致的，与白模保持一致" in system
     assert "不按白模改开篇" in system
     assert system.index("另附白模图") < system.index("只返回 JSON")
     user = messages[1]["content"]
@@ -1055,9 +1058,63 @@ def test_white_model_for_a_cell_names_that_quadrant():
     assert "白模四宫" in system
     assert "原图是已经裁出的右上格" in system
     assert "不要因为原图没有另外三格就判少件" in system
-    assert "按白模这一格里这一具的朝向改" in system
-    assert "长短边等朝向与白模不一致的，与白模保持一致" in system
+    assert "只改这一张已经裁出的原图" in system
+    assert "哪一格、哪一具、这一格改成什么样" in system
+    assert "不写「都跟对应格」" in system
     assert messages[1]["content"][2]["image_url"]["url"] == "https://cdn.example/clay.png"
+
+
+def test_facing_how_names_the_narrow_face_and_the_door_side():
+    from app.services.script_analysis_flow.environment_quad_facing import facing_how
+
+    script = """
+mass("南墙墙皮", "wall", east=0, north=-3.6, along_east=6.5, along_north=0.2, height=2.9, bottom=0)
+mass("办公沙发", "furniture", east=0, north=0, along_east=1.8, along_north=0.8, height=0.75, bottom=0, face="上")
+mass("金属滑移门", "door", east=0, north=-3.5, along_east=1.6, along_north=0.08, height=2.4, bottom=0, state="全关")
+"""
+    sofa = facing_how(script, "右上", "办公沙发")
+    assert sofa.startswith("靠近镜头的是窄的一面。")
+    assert "长边从靠近镜头伸向远离镜头，短边朝画面左右。" in sofa
+    assert "朝上，不写成朝着镜头。" in sofa
+    door = facing_how(script, "右下", "金属滑移门")
+    assert door == "全关。这一格这具在画面左，只见向里的厚。"
+
+
+def test_vague_white_model_edit_is_rewritten_per_cell_and_subject():
+    script = """
+mass("南墙墙皮", "wall", east=0, north=-3.6, along_east=6.5, along_north=0.2, height=2.9, bottom=0)
+mass("办公沙发", "furniture", east=0, north=0, along_east=1.8, along_north=0.8, height=0.75, bottom=0, face="上")
+mass("金属滑移门", "door", east=0, north=-3.5, along_east=1.6, along_north=0.08, height=2.4, bottom=0, state="全关")
+"""
+    vague = (
+        "第一张是要改的原图。第二张是同一处的白模四宫。左上望北，右上望东，左下望南，右下望西。"
+        "主体朝向按白模对应格里每一具的朝向修改第一张对应格。"
+        "长短边等朝向与白模不一致的，与白模保持一致。"
+        "长边朝哪、短边朝哪、宽面朝哪、窄面朝哪，都跟对应格。"
+        "白模的白底、黑线和没有明暗的表面不画进成图。颜色、材质、纹样、光线仍按原图。"
+        "改右上格的办公沙发。改右下格的金属滑移门。"
+    )
+    cleaned = drop_vague_facing_sentences(vague)
+    assert "每一具" not in cleaned
+    assert "都跟对应格" not in cleaned
+    assert cleaned.startswith("改右上格的办公沙发。")
+    filled = specify_facing_edits(cleaned, script)
+    assert "改右上格的办公沙发。靠近镜头的是窄的一面。" in filled
+    assert "长边从靠近镜头伸向远离镜头，短边朝画面左右。" in filled
+    assert "改右下格的金属滑移门。全关。这一格这具在画面左，只见向里的厚。" in filled
+    entity = Dummy(id=7, prompt=MAIN_PROMPT, attrs={"layout_script": script})
+    plan = plan_consistency_writes(
+        entity,
+        entity,
+        MAIN_PROMPT,
+        {"consistent": False, "summary": "右上格沙发和右下格门的朝向不对", "image_edit_instruction": vague},
+    )
+    text = plan["image_edit_instruction"]
+    assert text.startswith("改右上格的办公沙发。靠近镜头的是窄的一面。")
+    assert "改右下格的金属滑移门。全关。" in text
+    assert "只改右上格、右下格里点名的这几处" in text
+    assert "每一具" not in text
+    assert "都跟对应格" not in text
 
 
 def test_consistency_check_passes_public_image_link():

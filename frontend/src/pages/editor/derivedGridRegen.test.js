@@ -788,26 +788,29 @@ describe('white model facing check', () => {
         assert.equal(whiteModelFromConsistencyResult({}), null);
     });
 
-    it('tells the edit to follow the white model facing and does not repeat the lead', () => {
-        const quad = withWhiteModelEditInstruction('改左上格的台。', {
+    it('names the cell, the subject, and the change before the white-model note', () => {
+        const body = '改右上格的办公沙发。靠近镜头的是窄的一面。长边从靠近镜头伸向远离镜头，短边朝画面左右。改右下格的金属滑移门。这一格正对这具。全关。';
+        const quad = withWhiteModelEditInstruction(body, {
             url: 'https://cdn.example/clay.png',
             scope: 'quad',
         });
-        assert.match(quad, /^第一张是要改的原图/);
-        assert.match(quad, /主体朝向按白模对应格里每一具的朝向修改第一张对应格/);
-        assert.match(quad, /长短边等朝向与白模不一致的，与白模保持一致/);
-        assert.match(quad, /白模四宫/);
-        assert.match(quad, /改左上格的台/);
+        assert.match(quad, /^改右上格的办公沙发/);
+        assert.equal(quad.includes('每一具'), false);
+        assert.equal(quad.includes('都跟对应格'), false);
+        assert.match(quad, /长边从靠近镜头伸向远离镜头，短边朝画面左右/);
+        assert.match(quad, /改右下格的金属滑移门/);
+        assert.match(quad, /白模的白底/);
+        assert.ok(quad.indexOf('改右上格的办公沙发') < quad.indexOf('第一张是要改的原图'));
         assert.equal(withWhiteModelEditInstruction(quad, { url: 'https://cdn.example/clay.png', scope: 'quad' }), quad);
-        const cell = withWhiteModelEditInstruction('改门。', {
+        const cell = withWhiteModelEditInstruction('改右上格的门。这一格正对这具。全关。', {
             url: 'https://cdn.example/clay.png',
             scope: 'sheet',
             position: '右上',
         });
+        assert.match(cell, /^改右上格的门/);
         assert.match(cell, /已经裁出的右上格/);
-        assert.match(cell, /白模四宫/);
-        assert.match(cell, /长短边等朝向与白模不一致的，与白模保持一致/);
         assert.match(cell, /不要把另外三格画回来/);
+        assert.equal(cell.includes('都跟这一格'), false);
         assert.equal(withWhiteModelEditInstruction('改门。', null), '改门。');
     });
 });
