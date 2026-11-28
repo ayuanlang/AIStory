@@ -1084,22 +1084,23 @@ export function consistencyWhiteModel(entity, entities) {
     };
 }
 
-export function whiteModelEditLead(whiteModel) {
+export function whiteModelEditTail(whiteModel) {
+    const keep = '白模的白底、黑线和没有明暗的表面不画进成图。颜色、材质、纹样、光线仍按原图。';
     const scope = String(whiteModel?.scope || '').trim();
     if (scope === 'sheet') {
         const position = String(whiteModel?.position || '').trim();
         const cell = position ? `${position}格` : '对应的那一格';
-        return `第一张是要改的原图，是已经裁出的${cell}。第二张是这一处的白模四宫。左上望北，右上望东，左下望南，右下望西。只按白模里${cell}的主体朝向修改第一张。长短边等朝向与白模不一致的，与白模保持一致。长边朝哪、短边朝哪、宽面朝哪、窄面朝哪，都跟这一格。不要把另外三格画回来。白模的白底、黑线和没有明暗的表面不画进成图。颜色、材质、纹样、光线仍按原图。`;
+        return `第一张是要改的原图，是已经裁出的${cell}。第二张白模只看${cell}。上面每一句已经写明改这一格的哪一具、改成什么样，按那一句改。不要把另外三格画回来。${keep}`;
     }
-    return '第一张是要改的原图。第二张是同一处的白模四宫。左上望北，右上望东，左下望南，右下望西。主体朝向按白模对应格里每一具的朝向修改第一张对应格。长短边等朝向与白模不一致的，与白模保持一致。长边朝哪、短边朝哪、宽面朝哪、窄面朝哪，都跟对应格。白模的白底、黑线和没有明暗的表面不画进成图。颜色、材质、纹样、光线仍按原图。';
+    return `第一张是要改的原图。第二张是同一处的白模四宫，左上望北，右上望东，左下望南，右下望西。上面每一句已经写明改哪一格、哪一具、改成什么样，按那一句改。${keep}`;
 }
 
 export function withWhiteModelEditInstruction(instruction, whiteModel) {
     const text = String(instruction || '').trim();
     const url = String(whiteModel?.url || '').trim();
     if (!text || !url) return text;
-    if (text.includes('第二张是') && text.includes('白模')) return text;
-    return `${whiteModelEditLead(whiteModel)}\n${text}`;
+    if (text.includes('白模的白底') && text.includes('第一张是要改的原图')) return text;
+    return `${text}\n${whiteModelEditTail(whiteModel)}`;
 }
 
 export function applyWhiteModelQuadReference(prompt, refs, entity) {

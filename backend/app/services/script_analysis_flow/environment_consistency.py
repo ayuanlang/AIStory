@@ -26,6 +26,7 @@ from app.services.script_analysis_flow.derived_env_ingest import (
     quad_cells_prompt_ready,
     strip_main_environment_draft_wrapper,
 )
+from app.services.script_analysis_flow.environment_quad_facing import facing_how
 from app.services.soft_delete import _active_entity_clause
 
 LAST_SUBMITTED_PROMPT_ATTR = "last_submitted_image_prompt"
@@ -1229,6 +1230,108 @@ def seal_cell_edit_instruction(text: Optional[str], *, quad_positions: bool = Fa
     return raw
 
 
+_HOW_MARK = (
+    "长边",
+    "短边",
+    "宽的一面",
+    "窄的一面",
+    "只见",
+    "正对",
+    "屏面",
+    "朝上",
+    "全关",
+    "全开",
+    "半开",
+    "不画这具",
+    "一头近一头远",
+)
+_VAGUE_FACING = (
+    "第一张是要改的原图",
+    "第二张是同一处的白模",
+    "第二张是这一处的白模",
+    "主体朝向按白模",
+    "长短边等朝向与白模不一致",
+    "长边朝哪",
+    "都跟对应格",
+    "都跟这一格",
+    "白模的白底",
+    "按白模对应格",
+    "按白模这一格",
+    "按白模里",
+    "每一具的朝向",
+    "左上望北",
+)
+_FACING_EDIT = re.compile(
+    r"改(?:(?P<pos>左上|左下|右上|右下)格|(?P<angle>0|90|180|270)度格)的(?P<subject>[^。]{1,40})。"
+)
+
+
+def drop_vague_facing_sentences(text: Optional[str]) -> str:
+    """Drop the generic white-model paragraph. It never says which subject changes how."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    kept: List[str] = []
+    for part in re.split(r"(?<=。)", raw):
+        sentence = part.strip()
+        if not sentence:
+            continue
+        if sentence[-1] not in "。！？":
+            sentence += "。"
+        vague = any(mark in sentence for mark in _VAGUE_FACING)
+        named = _FACING_EDIT.search(sentence)
+        has_how = any(mark in sentence for mark in _HOW_MARK)
+        if vague and named and has_how:
+            kept.append(sentence)
+            continue
+        if vague and named:
+            kept.append(named.group(0))
+            continue
+        if vague:
+            continue
+        kept.append(sentence)
+    return "".join(kept).strip()
+
+
+def specify_facing_edits(text: Optional[str], script: str) -> str:
+    """After each named cell and subject, write that white-model cell's facing."""
+    raw = str(text or "")
+    if not raw or not str(script or "").strip():
+        return raw
+    matches = list(_FACING_EDIT.finditer(raw))
+    if not matches:
+        return raw
+    pieces: List[str] = []
+    cursor = 0
+    for index, match in enumerate(matches):
+        pieces.append(raw[cursor:match.end()])
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+        gap = raw[match.end():next_start]
+        if not any(mark in gap for mark in _HOW_MARK):
+            pos = match.group("pos") or _ANGLE_POS.get(match.group("angle") or "", "")
+            how = facing_how(script, pos, match.group("subject") or "")
+            if how:
+                pieces.append(how)
+        pieces.append(gap)
+        cursor = next_start
+    return "".join(pieces).strip()
+
+
+def _layout_script(*entities: Any) -> str:
+    for entity in entities:
+        if entity is None:
+            continue
+        script = str(attrs_of(entity).get("layout_script") or "").strip()
+        if script:
+            return script
+    return ""
+
+
+def _prepare_facing_edit(text: Optional[str], script: str) -> Optional[str]:
+    cleaned = drop_vague_facing_sentences(_strip_corner_labels(text))
+    return _blank_to_none(specify_facing_edits(cleaned, script))
+
+
 _HIDDEN_WALL_BY_ANGLE = {0: "南壁", 90: "西壁", 180: "北壁", 270: "东壁"}
 _OPENING_SECTION_RE = re.compile(
     r"【(定位|主体外形|六面一次|北壁|东壁|南壁|西壁|中区|光学说明|色彩说明|构图|四向拼图)】"
@@ -1358,7 +1461,10 @@ def _plan_cell_consistency_writes(
 ) -> Dict[str, Any]:
     """First-cut check: rewrite this grid cell and the single reference image together."""
     summary = str(payload.get("summary") or "").strip()
-    image_edit_instruction = _blank_to_none(_strip_corner_labels(payload.get("image_edit_instruction")))
+    image_edit_instruction = _prepare_facing_edit(
+        payload.get("image_edit_instruction"),
+        _layout_script(main_entity, entity),
+    )
     revised_cell = _blank_to_none(payload.get("revised_cell"))
     revised_prompt = _blank_to_none(payload.get("revised_prompt"))
     angle = derived_view_angle(entity)
@@ -1450,7 +1556,10 @@ def _plan_cell_consistency_writes(
 def _plan_derived_main_consistency_writes(entity: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Derived main: keep the source main, and only revise this four-grid's own prompt or image."""
     summary = str(payload.get("summary") or "").strip()
-    image_edit_instruction = _blank_to_none(payload.get("image_edit_instruction"))
+    image_edit_instruction = _prepare_facing_edit(
+        payload.get("image_edit_instruction"),
+        _layout_script(entity),
+    )
     if image_edit_instruction:
         image_edit_instruction = order_quad_edit_clauses(image_edit_instruction) or None
     if image_edit_instruction and "四格一起改" not in image_edit_instruction:
@@ -1566,7 +1675,10 @@ def plan_consistency_writes(
         return _plan_derived_main_consistency_writes(entity, payload)
     summary = str(payload.get("summary") or "").strip()
     image_edit_instruction = seal_cell_edit_instruction(
-        payload.get("image_edit_instruction"),
+        _prepare_facing_edit(
+            payload.get("image_edit_instruction"),
+            _layout_script(entity, main_entity),
+        ),
         quad_positions=(kind == "main"),
     )
     main_prompt = str(getattr(main_entity, "generation_prompt_cn", "") or "") if main_entity is not None else ""
@@ -1802,6 +1914,20 @@ def layout_image_url(entity: Any) -> str:
     return str(attrs_of(entity).get("layout_image_url") or "").strip()
 
 
+_WHITE_MODEL_EDIT_SHAPE = (
+    "朝向不符时，image_edit_instruction 每一处单独成句，写清三样：哪一格、哪一具、这一格改成什么样。\n"
+    "句式：改{格}的{主体名}。后面写白模这一格里这一具看得见的朝向。"
+    "长边朝画面左、画面右、靠近镜头或远离镜头里的哪一向，短边朝哪一向，靠近镜头的是宽的一面还是窄的一面。"
+    "门再写这一格是正对还是只见向里的厚，开着还是关着。\n"
+    "只写白模这一格里这一具实际看见的那一面。"
+    "不写「每一具」，不写「都跟对应格」，不写「与白模保持一致」，不写「按白模对应格」。"
+    "不把「第一张是要改的原图」和「第二张是同一处的白模四宫」抄进改图指令。\n"
+    "只写「改某一格的某一具。」就结束，不合格。后面必须有这一格这一具的长边、短边、宽面或窄面。\n"
+    "白模的白底、黑线和没有明暗的表面不画进成图。颜色、材质、纹样、光线仍按原图。"
+    "这句可以写在改图指令最后，不能代替朝向句。\n"
+)
+
+
 def white_model_facing_clause(scope: str, position: str = "") -> str:
     """Facing rules used only when a white-model image is attached."""
     if str(scope or "").strip() == "sheet":
@@ -1810,25 +1936,24 @@ def white_model_facing_clause(scope: str, position: str = "") -> str:
             "另附白模图。用户消息第一张是待查原图，第二张是这一处的白模四宫。左上望北，右上望东，左下望南，右下望西。\n"
             f"原图是已经裁出的{cell}。只拿白模里同一格的主体朝向和这一张原图对。"
             "不要因为原图没有另外三格就判少件。\n"
-            "白模只锁主体朝向，含长短边。台、床、柜、门是长边朝哪、短边朝哪、"
-            "哪一面朝外、侧面还是背面，门在哪一面墙上、开着还是关着，都照白模这一格。\n"
+            "白模只锁主体朝向，含长短边。台、床、柜、门、沙发是长边朝哪、短边朝哪、"
+            "宽面朝哪、窄面朝哪、哪一面朝外、侧面还是背面，门在哪一面墙上、开着还是关着，都照白模这一格。\n"
             "原图的长短边等朝向和这一格里这一具不一致，就是朝向不一致。\n"
             "颜色、材质、纹样、光线、光比不跟白模对。白模的白底、黑线和没有明暗的表面不是成图内容。\n"
-            "朝向不符时，image_edit_instruction 只改这一张原图，并写明按白模这一格里这一具的朝向改。"
-            "长短边等朝向与白模不一致的，与白模保持一致。\n"
-            "开篇和宫格的文字仍按原有规则，不按白模改开篇。\n"
+            f"image_edit_instruction 只改这一张已经裁出的原图。句式从改{cell}的主体名写起。不要把另外三格画回来。\n"
+            + _WHITE_MODEL_EDIT_SHAPE
+            + "开篇和宫格的文字仍按原有规则，不按白模改开篇。\n"
         )
     return (
         "另附白模图。用户消息第一张是待查原图，第二张是同一处的白模四宫。左上望北，右上望东，左下望南，右下望西。\n"
         "白模只锁主体朝向，含长短边。原图每一格跟白模同一格对。\n"
         "原图仍是四宫：左上望北，右上望东，左下望南，右下望西。\n"
-        "台、床、柜、门在白模这一格里是长边朝哪、短边朝哪、哪一面朝外、侧面还是背面，"
+        "台、床、柜、门、沙发在白模这一格里是长边朝哪、短边朝哪、宽面朝哪、窄面朝哪、哪一面朝外、侧面还是背面，"
         "门在哪一面墙上、开着还是关着，都照这一格。\n"
         "原图某一格的长短边等朝向和白模同一格里这一具不一致，就是朝向不一致。\n"
         "颜色、材质、纹样、光线、光比不跟白模对。白模的白底、黑线和没有明暗的表面不是成图内容。\n"
-        "朝向不符时，image_edit_instruction 写明按白模对应格里这一具的朝向改原图对应格。"
-        "长短边等朝向与白模不一致的，与白模保持一致。\n"
-        "开篇和宫格的文字仍按原有规则，不按白模改开篇。\n"
+        + _WHITE_MODEL_EDIT_SHAPE
+        + "开篇和宫格的文字仍按原有规则，不按白模改开篇。\n"
     )
 
 
@@ -2188,10 +2313,14 @@ def build_consistency_messages(
         "两格都错就两格都写，不能只留最严重的一格。"
         "image_edit_instruction 只写给改图模型，不重写环境提示词，不写米，不写东南西北。"
         "桌、案、床、榻、沙发的改图句只抄四宫技能里这一望向已经规定的那一句。不写横在，不写不要把长边画成。"
-        "单张角度图的句式：改{0|90|180|270}度格的{主体名}。后面只写四宫技能里这一望向的那一句。"
+        "单张角度图的句式：改{0|90|180|270}度格的{主体名}。后面必须写这一格这一具怎么改："
+        "长边朝画面左、画面右、靠近镜头或远离镜头里的哪一向，短边朝哪一向，靠近镜头的是宽的一面还是窄的一面。"
+        "门写这一格是正对还是只见向里的厚，开着还是关着。只写主体名就结束，不合格。"
         "四宫格图要改的宫格按左上格、左下格、右上格、右下格这个顺序写。"
         "左上格是0度格，左下格是180度格，右上格是90度格，右下格是270度格。"
-        "四宫格句式：改{左上|左下|右上|右下}格的{主体名}。后面只写四宫技能里这一望向的那一句。"
+        "四宫格句式：改{左上|左下|右上|右下}格的{主体名}。后面必须写这一格这一具怎么改："
+        "长边朝画面左、画面右、靠近镜头或远离镜头里的哪一向，短边朝哪一向，靠近镜头的是宽的一面还是窄的一面。"
+        "门写这一格是正对还是只见向里的厚，开着还是关着。只写主体名就结束，不合格。"
         "多格要改时，每一格单独成句，顺序固定为左上格、左下格、右上格、右下格。没改的格子不写。"
         "只改一格时，句尾是：只改这一格里点名的这一处。另外三格、格线、没有点名的主体、光色和构图都保持原图不动。不要重画整张四宫。"
         "改了多格时，句尾按左上格、左下格、右上格、右下格列出这些格，其余格子保持原图不动。不要重画整张四宫。"

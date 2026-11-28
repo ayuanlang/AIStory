@@ -8,7 +8,8 @@ words into the cells. Characters and props are left out.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Sequence
+import re
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.services.script_analysis_flow.environment_layout import layout_mass_fields
 
@@ -163,3 +164,116 @@ def quad_facing_lock(name: str, script: str) -> str:
         "长短边等朝向与白模不一致的，与白模保持一致。\n"
     )
     return head + "\n".join(lines) + "\n【/朝向锁】"
+
+
+_WIDE_HOW = "靠近镜头的是宽的一面。长边朝画面左右，短边从靠近镜头伸向远离镜头。"
+_NARROW_HOW = "靠近镜头的是窄的一面。长边从靠近镜头伸向远离镜头，短边朝画面左右。"
+
+
+def _wide_how(row: Dict[str, Any], cell: str) -> str:
+    along_east = _number(row, "along_east")
+    along_north = _number(row, "along_north")
+    if along_east >= along_north + _LONG:
+        wide = cell in {"左上", "左下"}
+    elif along_north >= along_east + _LONG:
+        wide = cell in {"右上", "右下"}
+    else:
+        return ""
+    return _WIDE_HOW if wide else _NARROW_HOW
+
+
+def _place_how(cell: str, side: str, *, thickness: bool) -> str:
+    phrase = (_DOOR_CELL.get(side) or {}).get(cell, "")
+    if phrase == "在镜头后，不点名":
+        return "这一格不画这具。"
+    if phrase == "在正面":
+        if thickness:
+            return "这一格正对这具。"
+        return "这一格这具在正面，从画面左铺到画面右。"
+    if phrase == "在画面左":
+        if thickness:
+            return "这一格这具在画面左，只见向里的厚。"
+        return "这一格这具贴在画面左，一头近一头远。"
+    if phrase == "在画面右":
+        if thickness:
+            return "这一格这具在画面右，只见向里的厚。"
+        return "这一格这具贴在画面右，一头近一头远。"
+    return ""
+
+
+def _screen_how(cell: str, face: str) -> str:
+    view = _VIEW[cell]
+    if face == _OPPOSITE[view]:
+        return "屏面朝着镜头。"
+    if face == view:
+        return "屏面背对镜头。"
+    if face == _SCREEN_RIGHT[view]:
+        return "屏面朝画面右，见侧沿。"
+    return "屏面朝画面左，见侧沿。"
+
+
+def _match_row(rows: Sequence[Dict[str, Any]], subject: str) -> Optional[Dict[str, Any]]:
+    wanted = re.sub(r"\s+", "", str(subject or "")).strip("，,、。 ")
+    if not wanted:
+        return None
+    exact = [row for row in rows if str(row.get("name") or "") == wanted and row.get("kind") not in _SKIP_KINDS]
+    if len(exact) == 1:
+        return exact[0]
+    scored = []
+    for row in rows:
+        if row.get("kind") in _SKIP_KINDS:
+            continue
+        name = str(row.get("name") or "")
+        if name and (name in wanted or wanted in name):
+            scored.append((len(name), row))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return scored[0][1]
+
+
+def facing_how(script: str, cell: str, subject: str) -> str:
+    """Picture-language facing of one subject in one white-model cell."""
+    if cell not in _CELL_ORDER:
+        return ""
+    rows = layout_mass_fields(script)
+    walls = [row for row in rows if row.get("kind") == "wall"]
+    row = _match_row(rows, subject)
+    if row is None:
+        return ""
+    kind = str(row.get("kind") or "")
+    name = str(row.get("name") or "")
+    face = str(row.get("face") or "").strip()
+    parts: List[str] = []
+    if kind == "wall":
+        parts.append(_place_how(cell, _wall_side(row, walls), thickness=False))
+    if kind == "furniture" and not _is_screen(name):
+        wide = _wide_how(row, cell)
+        if wide:
+            parts.append(wide)
+        if face == "上":
+            parts.append("朝上，不写成朝着镜头。")
+    if kind in {"door", "window"}:
+        side = _wall_side(row, walls)
+        place = (_DOOR_CELL.get(side) or {}).get(cell, "")
+        if place == "在镜头后，不点名":
+            parts.append("这一格不画这具。")
+        else:
+            state = _OPEN_STATE.get(str(row.get("state") or "").strip(), "")
+            if state:
+                parts.append(state if state.endswith("。") else state + "。")
+            parts.append(_place_how(cell, side, thickness=True))
+    if _is_screen(name) and face in _OPPOSITE:
+        parts.append(_screen_how(cell, face))
+    kept = []
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        if text[-1] not in "。":
+            text += "。"
+        if text not in kept:
+            kept.append(text)
+    return "".join(kept)
