@@ -1694,7 +1694,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"Project Title: {project_title}\n"
             f"Base Positioning: {str(gi_basic_info.get('base_positioning') or project_global_info.get('base_positioning') or '').strip()}\n"
             f"{format_project_season_prompt(getattr(req, 'season_occurrence', None), gi)}\n"
-            f"Episode Number: {'预告片。本集集号已提供。这不是正片续写，不要上一集正文，不要 EMERGENCY_RECOVERY_BLOCK。' if call_is_trailer else idx}\n"
+            f"Episode Number: {'预告片。本集集号已提供。这不是正片续写，不要上一集正文，不要 EMERGENCY_RECOVERY_BLOCK。写法与剧本生成相同。内容是高潮选段，段落可以简洁跳跃，每一节要有能看懂的短情节，禁止画面式描述。' if call_is_trailer else idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
             f"{episode_product_specs_block}"
