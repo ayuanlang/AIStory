@@ -553,7 +553,8 @@ _IDENT_INHERIT_POSITIONING = re.compile(
 
 
 _SHEET_PREFIX_RE = re.compile(
-    r"^同一张16:9图，必须画成2×2四宫格[\s\S]*?不画角标。"
+    r"^(?:One 16:9 sheet, a 2x2 grid[\s\S]*?No black bars\. )?"
+    r"同一张16:9图，必须画成2×2四宫格[\s\S]*?不画角标。"
     r"(?:只画各格已经点名的主体。[\s\S]*?第二道门。)?"
     r"(?:门只画点到的那一扇。[\s\S]*?走廊。)?"
 )

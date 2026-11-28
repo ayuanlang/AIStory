@@ -204,11 +204,20 @@ def choose_environment_plan_scene_text(
         return finish(split, "saved_scene_split")
     if script_units:
         return finish(script, "current_script")
+    for item in stale_texts or []:
+        candidate = str(item or "").strip()
+        if not candidate or _normalize_stage_echo(candidate) == payload_norm:
+            continue
+        candidate_units, _candidate_exc = _parse_scene_units_or_none(candidate)
+        if candidate_units:
+            return finish(candidate, "saved_stage_text")
     if payload_exc is not None and payload_exc.code not in _MARKER_MISS_CODES:
         raise HTTPException(status_code=422, detail=f"{payload_exc.code}:{payload_exc}") from payload_exc
     logger.error(
-        "[environment_plan] scene markers missing %s",
+        "[environment_plan] scene markers missing payload=%s split=%s script=%s",
         _marker_diag(payload),
+        _marker_diag(split),
+        _marker_diag(script),
     )
     raise HTTPException(status_code=422, detail="ENVIRONMENT_PLAN_SCENE_MARKERS_MISSING")
 

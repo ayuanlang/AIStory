@@ -237,6 +237,33 @@ def test_environment_plan_uses_current_script_when_saved_split_is_another_story(
     assert resolved == current
 
 
+def test_environment_plan_uses_saved_stage_text_when_split_slot_has_no_markers():
+    from app.services.environment_plan_runner import choose_environment_plan_scene_text
+
+    marked = _scene_block("EP01_SC01", "茶摊。")
+    resolved = choose_environment_plan_scene_text(
+        "1-3 清河城 茶摊 外 日",
+        scene_split="",
+        script_text="1-3 清河城 茶摊 外 日",
+        stale_texts=["", marked],
+    )
+    assert resolved == marked
+
+
+def test_environment_plan_keeps_current_script_ahead_of_older_stage_text():
+    from app.services.environment_plan_runner import choose_environment_plan_scene_text
+
+    current = _scene_block("EP03_SC01", "总裁室。")
+    older = _scene_block("EP01_SC01", "山顶广场。")
+    resolved = choose_environment_plan_scene_text(
+        "没有场标记的请求",
+        scene_split="",
+        script_text=current,
+        stale_texts=[older],
+    )
+    assert resolved == current
+
+
 def test_environment_plan_keeps_request_that_matches_saved_split():
     from app.services.environment_plan_runner import choose_environment_plan_scene_text
 

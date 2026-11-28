@@ -319,7 +319,10 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
     assert plain.startswith(QUAD_SHEET_SENTENCE)
     assert "【四向拼图】" in plain
     assert "【构图】" not in plain
-    assert compose_stored_quad_prompt("", cells) == f"{QUAD_SHEET_SENTENCE}\n\n{cells.strip()}"
+    composed = compose_stored_quad_prompt("", cells)
+    assert composed.startswith(QUAD_SHEET_SENTENCE)
+    assert "这一格只画在左上四分之一" in composed
+    assert "这一格只画在右下四分之一" in composed
     echoed = compose_stored_quad_prompt(
         "",
         "【主环境设计稿】客栈大堂\n" + draft + cells,
@@ -379,6 +382,7 @@ def test_main_environment_quad_prompt_requires_opening_and_four_cells():
 def test_compose_drops_unlisted_color_props_and_names_the_image_cliches():
     cells = (
         "【四向拼图】\n"
+        "构图：方法=对称，倾向=对称。\n"
         "[0度格-左上·北]\n"
         "[90度格-右上·东]\n"
         "[180度格-左下·南]\n"
@@ -396,6 +400,10 @@ def test_compose_drops_unlisted_color_props_and_names_the_image_cliches():
     assert "绿植、台灯、笔筒、电脑、画、窗外的城" in stored
     assert "不画门外的走廊" in stored
     assert stored.count("同一张16:9图") == 1
+    assert "Do not enlarge the top-left panel." in stored
+    assert stored.count("这一格只画在左上四分之一") == 1
+    assert stored.count("这一格只画在右下四分之一") == 1
+    assert "方法只在每一格内部" in stored
 
 
 def test_quad_apply_failure_names_the_gap():

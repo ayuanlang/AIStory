@@ -58,13 +58,19 @@ LOCKED_QUAD_DEGREES = {
     "右下": 270,
 }
 QUAD_DEGREE_CONTRACT = "四宫度数=左上0度｜右上90度｜左下180度｜右下270度"
+_EN_SHEET = (
+    "One 16:9 sheet, a 2x2 grid of four equal panels split by a center cross. "
+    "Do not draw a single room photo. Do not enlarge the top-left panel. No black bars. "
+)
 QUAD_SHEET_SENTENCE = (
-    "同一张16:9图，必须画成2×2四宫格，四格一样大。"
+    _EN_SHEET
+    + "同一张16:9图，必须画成2×2四宫格，四格一样大。"
     "正中一条横线、一条竖线分成四格。"
     "四格外缘贴着这张16:9的四边，上下左右不留黑边。"
     "格与格之间只有正中那一条横线和一条竖线。"
     "左上、右上、左下、右下都要画满。"
     "不许只画其中一格，不许画成单张全景，不许留空格。"
+    "不要把左上格放大成整张房间照片。不要留上下黑边。"
     + QUAD_DEGREE_CONTRACT
     + "。左上望北，右上望东，左下望南，右下望西。"
     "四格是同一处的四个方向，材质与开闭相同。"
@@ -72,7 +78,14 @@ QUAD_SHEET_SENTENCE = (
     "只画各格已经点名的主体。不另加没有点名的植物、雕塑、器物、灯、灯管、绿植、台灯、笔筒、电脑、画、窗外的城或第二道门。"
     "门只画点到的那一扇。不画第二扇。不把全关画成开着。不画门外的走廊。"
 )
+_CELL_QUARTER = {
+    "[0度格-左上·北]": "这一格只画在左上四分之一。下缘停在正中横线，右缘停在正中竖线。不铺满整张图。",
+    "[90度格-右上·东]": "这一格只画在右上四分之一。下缘停在正中横线，左缘停在正中竖线。不铺满整张图。",
+    "[180度格-左下·南]": "这一格只画在左下四分之一。上缘停在正中横线，右缘停在正中竖线。不铺满整张图。",
+    "[270度格-右下·西]": "这一格只画在右下四分之一。上缘停在正中横线，左缘停在正中竖线。不铺满整张图。",
+}
 _SHEET_ECHO_RE = re.compile(
+    r"(?:One 16:9 sheet, a 2x2 grid[\s\S]*?No black bars\. )?"
     r"同一张16:9图，必须画成2×2四宫格[\s\S]*?不画角标。"
     r"(?:只画各格已经点名的主体。[\s\S]*?第二道门。)?"
     r"(?:门只画点到的那一扇。[\s\S]*?走廊。)?"
@@ -86,6 +99,7 @@ _MATERIAL_LEGEND = (
     "格子写了两端不到画面边缘，多门和百叶不铺满该壁。"
     "窄面格不画台面上的图。窄面格的桌只画左右窄、往后长的那一面，不画成左右宽的正对桌面。"
     "玻璃外不画城、楼、树。不另加绿植、台灯、笔筒、电脑、画。"
+    "四格各占四分之一。不把左上格放大成整张图。"
 )
 _DEPTH_CLAUSE_RE = re.compile(r"(?:纵深色层|前景=|中部=|背景=)[^｜\n]*")
 QUAD_CELL_POSITIONS = ("左上", "右上", "左下", "右下")
@@ -2723,6 +2737,33 @@ def missing_requested_quad_drafts(
     ]
 
 
+def _pin_cell_quarters(quad: str) -> str:
+    """Keep each cell inside its own quarter so the image model cannot enlarge the first cell."""
+    lines = str(quad or "").splitlines()
+    pinned: List[str] = []
+    for index, line in enumerate(lines):
+        pinned.append(line)
+        sentence = _CELL_QUARTER.get(line.strip())
+        if not sentence:
+            continue
+        nxt = ""
+        for later in lines[index + 1:]:
+            if later.strip():
+                nxt = later.strip()
+                break
+        if "四分之一" not in nxt:
+            pinned.append(sentence)
+    text = "\n".join(pinned)
+
+    def _keep_composition_inside(match: re.Match) -> str:
+        sentence = match.group(1)
+        if "每一格内部" in sentence:
+            return sentence
+        return sentence[:-1] + "。方法只在每一格内部，不把一座主体放到整张图正中。"
+
+    return re.sub(r"(构图：方法=[^。\n]*。)", _keep_composition_inside, text, count=1)
+
+
 def _strip_sheet_echo(text: str) -> str:
     cleaned = _SHEET_ECHO_RE.sub("", str(text or ""))
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -2799,7 +2840,7 @@ def compose_stored_quad_prompt(
     subjects = sections.get("主体外形", "").replace(_MATERIAL_LEGEND, "")
     if sections.get("色彩说明"):
         sections["色彩说明"] = _strip_unlisted_color_props(sections["色彩说明"], subjects)
-    quad = _strip_sheet_echo(_quad_only_prompt(returned_prompt))
+    quad = _pin_cell_quarters(_strip_sheet_echo(_quad_only_prompt(returned_prompt)))
     parts: List[str] = []
     if quad:
         parts.append(quad)

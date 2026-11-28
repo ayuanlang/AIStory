@@ -5171,7 +5171,10 @@ const chooseEnvironmentPlanSourceText = ({
     }
     if (splitIds.length) return split;
     if (scriptIds.length) return script;
-    return '';
+    const markedStale = (Array.isArray(staleTexts) ? staleTexts : [])
+        .map((item) => String(item || '').trim())
+        .find((item) => listSceneMarkerIds(item).length > 0);
+    return markedStale || '';
 };
 
 // Prop / character editor shows the saved scene_split. The in-memory ref is only a gap-fill.
