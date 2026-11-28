@@ -224,7 +224,11 @@ center_x = (low.x + high.x) / 2
 center_y = (low.y + high.y) / 2
 room_h = max(0.3, high.z - low.z)
 walls = [item for item in MADE if item["kind"] == "wall" and still_here(item)]
-inside = len(walls) >= 2
+closures = [
+    item for item in MADE
+    if item["kind"] in {{"wall", "door", "window"}} and still_here(item) and item["along_east"] != item["along_north"]
+]
+inside = len(closures) >= 2
 
 def camera(name, location, target):
     data = bpy.data.cameras.new(name)
@@ -282,23 +286,29 @@ def opening_for(look):
     floor_top = low.z
     height = max(0.3, ceil - floor_top)
     if abs(look.y) > 0.5:
-        rear = min(walls, key=lambda item: item["north"]) if look.y > 0 else max(walls, key=lambda item: item["north"])
-        far_wall = max(walls, key=lambda item: item["north"]) if look.y > 0 else min(walls, key=lambda item: item["north"])
+        ends = [item for item in closures if item["along_north"] < item["along_east"]] or walls
+        if not ends:
+            return (low.y if look.y > 0 else high.y), (high.y if look.y > 0 else low.y), max(0.3, high.x - low.x), floor_top, height, center_x
+        rear = min(ends, key=lambda item: item["north"]) if look.y > 0 else max(ends, key=lambda item: item["north"])
+        far_wall = max(ends, key=lambda item: item["north"]) if look.y > 0 else min(ends, key=lambda item: item["north"])
         near = rear["north"] + math.copysign(rear["along_north"] / 2.0, look.y)
         far = far_wall["north"] - math.copysign(far_wall["along_north"] / 2.0, look.y)
         faces = []
-        for item in walls:
+        for item in closures:
             if item["along_east"] < item["along_north"]:
                 sign = 1.0 if item["east"] >= center_x else -1.0
                 faces.append(item["east"] - sign * item["along_east"] / 2.0)
         width = (max(faces) - min(faces)) if len(faces) >= 2 else max(0.3, high.x - low.x)
         return near, far, width, floor_top, height, center_x
-    rear = min(walls, key=lambda item: item["east"]) if look.x > 0 else max(walls, key=lambda item: item["east"])
-    far_wall = max(walls, key=lambda item: item["east"]) if look.x > 0 else min(walls, key=lambda item: item["east"])
+    ends = [item for item in closures if item["along_east"] < item["along_north"]] or walls
+    if not ends:
+        return (low.x if look.x > 0 else high.x), (high.x if look.x > 0 else low.x), max(0.3, high.y - low.y), floor_top, height, center_y
+    rear = min(ends, key=lambda item: item["east"]) if look.x > 0 else max(ends, key=lambda item: item["east"])
+    far_wall = max(ends, key=lambda item: item["east"]) if look.x > 0 else min(ends, key=lambda item: item["east"])
     near = rear["east"] + math.copysign(rear["along_east"] / 2.0, look.x)
     far = far_wall["east"] - math.copysign(far_wall["along_east"] / 2.0, look.x)
     faces = []
-    for item in walls:
+    for item in closures:
         if item["along_north"] < item["along_east"]:
             sign = 1.0 if item["north"] >= center_y else -1.0
             faces.append(item["north"] - sign * item["along_north"] / 2.0)
@@ -347,17 +357,31 @@ def clear_props(cam, look, rear, far, skipped):
 def on_wall(item, wall):
     return abs(item["east"] - wall["east"]) <= wall["along_east"] / 2 + 0.2 and abs(item["north"] - wall["north"]) <= wall["along_north"] / 2 + 0.2
 
+def face_slab(item, axis):
+    if item["kind"] not in {{"wall", "door", "window"}} or not still_here(item):
+        return False
+    if axis == "north":
+        return item["along_north"] < item["along_east"]
+    return item["along_east"] < item["along_north"]
+
+def outer_face(item, axis, sign):
+    half = (item["along_north"] if axis == "north" else item["along_east"]) / 2.0
+    return item[axis] + sign * half
+
 def rear_of(axis, sign):
-    walls = [item for item in MADE if item["kind"] == "wall" and still_here(item)]
-    if not walls:
+    slabs = [item for item in MADE if face_slab(item, axis)]
+    if not slabs:
         return []
-    edge = max(walls, key=lambda item: item[axis]) if sign > 0 else min(walls, key=lambda item: item[axis])
-    chosen = [edge]
+    faces = [outer_face(item, axis, sign) for item in slabs]
+    edge_value = max(faces) if sign > 0 else min(faces)
+    chosen = [item for item, face in zip(slabs, faces) if abs(face - edge_value) <= 0.35]
+    seen = {{id(item) for item in chosen}}
     for item in MADE:
-        if not still_here(item):
+        if not still_here(item) or id(item) in seen:
             continue
-        if item["kind"] in {{"door", "window", "furniture"}} and on_wall(item, edge):
+        if item["kind"] in {{"door", "window", "furniture"}} and any(on_wall(item, host) for host in chosen if host["kind"] == "wall"):
             chosen.append(item)
+            seen.add(id(item))
     return chosen
 
 def central_subject():

@@ -945,3 +945,40 @@ def test_blender_renders_a_four_view_sheet_from_script():
     gray = image.convert("L")
     divider = [gray.getpixel((640, y)) for y in range(0, 720, 24)]
     assert sum(divider) / len(divider) < 160
+
+
+GATE_FACE_SCRIPT = "\n".join([
+    "FOCAL_MM = 35",
+    'mass("据点混凝土地面", "floor", east=0, north=0, along_east=6.5, along_north=7.5, height=0.04, bottom=0)',
+    'mass("工业防爆吊灯所在天花", "ceiling", east=0, north=0, along_east=6.5, along_north=7.5, height=0.08, bottom=2.9)',
+    'mass("加固闸门", "door", east=0, north=3.75, along_east=6.5, along_north=0.2, height=2.9, bottom=0)',
+    'mass("粗粝工业墙皮", "wall", east=3.25, north=0, along_east=0.2, along_north=7.5, height=2.9, bottom=0)',
+    'mass("工业立面墙皮", "wall", east=0, north=-3.75, along_east=6.5, along_north=0.2, height=2.9, bottom=0)',
+    'mass("加固结构墙皮", "wall", east=-3.25, north=0, along_east=0.2, along_north=7.5, height=2.9, bottom=0)',
+])
+
+
+def test_full_face_gate_does_not_blank_the_facing_view():
+    from app.services.script_analysis_flow.environment_layout_blender import (
+        LayoutRenderError,
+        blender_executable,
+        render_white_model,
+    )
+    try:
+        blender_executable()
+    except LayoutRenderError:
+        return
+    binary = render_white_model(GATE_FACE_SCRIPT)
+    from PIL import Image
+    import io
+    gray = Image.open(io.BytesIO(binary)).convert("L")
+    assert gray.size == (1280, 720)
+
+    def dark(box):
+        return sum(1 for value in gray.crop(box).getdata() if value < 80)
+
+    north = dark((16, 16, 624, 344))
+    east = dark((656, 16, 1264, 344))
+    south = dark((16, 376, 624, 704))
+    west = dark((656, 376, 1264, 704))
+    assert min(north, east, south, west) > 200, (north, east, south, west)

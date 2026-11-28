@@ -319,11 +319,25 @@ def parse_layout_boxes(opening: str) -> Tuple[List[LayoutBox], dict]:
     if span_m:
         spans = tuple(float(span_m.group(i)) for i in (1, 2, 3, 4))
     else:
-        walls = [box for box in boxes if box.kind == "wall"]
-        north_span = max((box.cy for box in walls if box.cy > 0), default=4.0)
-        south_span = max((-box.cy for box in walls if box.cy < 0), default=4.0)
-        east_span = max((box.cx for box in walls if box.cx > 0), default=3.5)
-        west_span = max((-box.cx for box in walls if box.cx < 0), default=3.5)
+        faces = [box for box in boxes if box.kind in {"wall", "door", "window"}]
+
+        def _span(keep, default):
+            values = [abs(box.cy if keep in {"north", "south"} else box.cx) for box in faces if _on_span(box, keep)]
+            return max(values) if values else default
+
+        def _on_span(box, keep):
+            if keep == "north":
+                return box.cy > 0 and box.sy < box.sx
+            if keep == "south":
+                return box.cy < 0 and box.sy < box.sx
+            if keep == "east":
+                return box.cx > 0 and box.sx < box.sy
+            return box.cx < 0 and box.sx < box.sy
+
+        north_span = _span("north", 4.0)
+        south_span = _span("south", 4.0)
+        east_span = _span("east", 3.5)
+        west_span = _span("west", 3.5)
         spans = (north_span, east_span, south_span, west_span)
     meta = {"spans": spans, "focal": focal, "wall_h": wall_h}
     return boxes, meta

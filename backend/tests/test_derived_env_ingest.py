@@ -397,8 +397,10 @@ def test_compose_drops_unlisted_color_props_and_names_the_image_cliches():
     assert "指示灯" not in stored
     assert "冷蓝" in stored
     assert "暗橙" in stored
-    assert "绿植、台灯、笔筒、电脑、画、窗外的城" in stored
-    assert "不画门外的走廊" in stored
+    assert "只画各格已经点名的主体" in stored
+    assert "窗外的城" not in stored
+    assert "不画门外的走廊" not in stored
+    assert "不把这一具画成多盏" not in stored
     assert stored.count("同一张16:9图") == 1
     assert "Do not enlarge the top-left panel." in stored
     assert stored.count("这一格只画在左上四分之一") == 1
