@@ -9,6 +9,7 @@ from app.services.script_analysis_flow.environment_layout import (
     boxes_from_layout_payload,
     boxes_from_layout_script,
     extract_layout_script,
+    apply_screens,
     facing_by_name,
     facing_tip,
     layout_messages,
@@ -99,6 +100,42 @@ def test_facing_mark_follows_the_opening():
     assert 'face="东"' not in script
     assert 'face="南"' in script
     assert "face=" in layout_messages(OPENING)[0]["content"]
+    assert 'kind="screen"' in layout_messages(OPENING)[0]["content"]
+
+
+def test_screen_slab_follows_screen_facing():
+    opening = """
+[@全息控制台]号=#1｜朝向=朝上｜屏面朝向=北｜距原点=北0米东0米。
+[@巨幕]号=#2｜屏面朝向=西｜壁关系=贴墙｜落点=东｜距原点=北0米东3.2米｜占地=沿墙2.0米×高1.1米×厚0.06米。
+[@立式全息终端]号=#3｜屏面朝向=南｜距原点=北-1米东0米。
+"""
+    script = apply_screens(
+        "\n".join([
+            "FOCAL_MM = 35",
+            'mass("巨幕", "wall", east=3.2, north=0, along_east=2.0, along_north=1.1, height=0.06, bottom=0.8, face="上")',
+        ]),
+        opening,
+    )
+    boxes, _meta = boxes_from_layout_script(script)
+    console = _named(boxes, "全息控制台")
+    assert console.kind == "furniture" and console.face == "上"
+    panel = _named(boxes, "全息控制台屏面")
+    assert panel.kind == "screen" and panel.face == "北"
+    assert panel.sy < panel.sx and panel.sy < panel.sz
+    assert panel.cy > console.cy
+    assert panel.cz > console.cz
+    screen = _named(boxes, "巨幕")
+    assert screen.kind == "screen" and screen.face == "西"
+    assert screen.sx < screen.sy and screen.sx < screen.sz
+    assert abs(screen.sy - 2.0) < 0.01 and abs(screen.sz - 1.1) < 0.01
+    standing = _named(boxes, "立式全息终端")
+    assert standing.kind == "screen" and standing.face == "南"
+    assert standing.sy < standing.sx and abs(standing.cz - standing.sz / 2) < 0.01
+    untouched = apply_screens(
+        'mass("会议桌", "furniture", east=0, north=0, along_east=1.2, along_north=2.4, height=0.75, bottom=0, face="上")',
+        OPENING,
+    )
+    assert "屏面" not in untouched
 
 
 def test_box_edges_are_the_twelve_sides():

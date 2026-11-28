@@ -1003,7 +1003,9 @@ along_east 是东西向全长，along_north 是南北向全长，单位米。hei
 北墙或南墙：沿墙长写入 along_east，厚写入 along_north。东墙或西墙：沿墙长写入 along_north，厚写入 along_east。height 用这一具自己的高，墙皮用墙高，门用门高。bottom=0。
 地面 kind="floor"，height=0.04，bottom=0。两轴都是无限制时 along_east=24，along_north=24。墙皮 kind="wall"。门 kind="door"，窗 kind="window"，并写 state="全关"、"半开"或"全开"，只抄开篇的开闭。
 这一具写了朝向、椅面朝向或屏面朝向，并且不是无，这一行加 face。朝向或椅面朝向是北、东、南、西，face 写这一向。屏面朝向是这四向、而朝向不是这四向，face 写屏面这一向。只有朝上，face="上"。朝向=无，或没写朝向，不加 face。室内面朝向不加 face。
-天空、远景，以及高、厚、沿墙长都没有米的具，不写。
+全息屏、立式全息终端、中继屏、固定显示屏、巨幕、矩阵屏、壁挂屏、光幕，以及注册名里有屏、全息、光幕、巨幕的具，kind="screen"。没有米也要写。屏面朝向是北或南，along_north 写厚，along_east 写宽。屏面朝向是东或西，along_east 写厚，along_north 写宽。厚没有写成米就写 0.06。宽和高没有写成米：贴墙的宽 1.6、高 0.9，bottom 离开地面；立在中部的宽 1.2、高 1.6、bottom=0。face 写屏面朝向。
+台、桌、案写了朝向=朝上，又写了屏面朝向：台身 kind="furniture"，face="上"。另起一行 kind="screen"，名字是注册名加屏面，薄板立在台身朝向屏面朝向的那一侧、底在台面上。屏面朝向是北，板心在台身北侧外沿，along_north 是厚。东、南、西照此。face 写屏面朝向。没有米的台身写 along_east=0.9，along_north=0.9，height=0.75。
+天空、远景不写。高、厚、沿墙长都没有米的具不写，屏和有屏面朝向的台除外。
 纹样、颜色、材质不写进脚本。不要加开篇没有的具。
 另附了角色或道具时，人 kind="person"，道具 kind="prop"，每人、每件各写一行。东、北、底、沿东、沿北、高照附上的数，不改。没有附上的角色和道具，不自己加。
 家具占地三个数时，最后一个是 height。只有长×宽时也要写：台、桌、案 height=0.75，床、榻 height=0.55，椅 height=0.9，凳 height=0.45。写了离平地，bottom 就等于那个米。灯 kind="lamp"。桌、椅、凳、床、台 kind="furniture"。
@@ -1013,7 +1015,8 @@ along_east 是东西向全长，along_north 是南北向全长，单位米。hei
 FOCAL_MM = 35
 mass("注册名", "wall", east=0, north=0, along_east=24, along_north=2, height=12, bottom=0)
 mass("注册名", "door", east=0, north=0, along_east=4, along_north=2, height=6, bottom=0, state="全开")
-mass("注册名", "furniture", east=0, north=0, along_east=0.6, along_north=0.6, height=0.9, bottom=0, face="南")"""
+mass("注册名", "furniture", east=0, north=0, along_east=0.6, along_north=0.6, height=0.9, bottom=0, face="南")
+mass("注册名", "screen", east=0, north=0, along_east=1.6, along_north=0.06, height=0.9, bottom=1.0, face="南")"""
 
 
 _FOOTPRINT_RE = re.compile(
@@ -1712,6 +1715,7 @@ _KIND_LABEL = {
     "lamp": "灯",
     "ramp": "楼梯",
     "furniture": "家具",
+    "screen": "屏",
     "person": "人",
     "prop": "道具",
 }
@@ -1738,6 +1742,9 @@ _KIND_WORDS = {
     "梯": "ramp",
     "furniture": "furniture",
     "家具": "furniture",
+    "screen": "screen",
+    "屏": "screen",
+    "屏幕": "screen",
     "person": "person",
     "人": "person",
     "角色": "person",
@@ -2036,6 +2043,265 @@ def boxes_from_layout_script(script: str) -> Tuple[List[LayoutBox], Dict[str, An
     if focal <= 0:
         focal = 35.0
     return boxes, {"focal": focal, "wall_h": 2.9, "spans": (4.0, 4.0, 4.0, 4.0)}
+
+
+_SCREEN_HOST_RE = re.compile(r"控制台|操作台|整备台|保险台|操纵台|全息台")
+_SCREEN_SLAB_RE = re.compile(r"屏|全息|光幕|巨幕|矩阵")
+_SCREEN_WALL_RE = re.compile(r"壁关系=(贴墙|悬挂|齐平|嵌入)|落点=([北东南西])")
+
+
+def _clause_faces(clause: str) -> Dict[str, str]:
+    found: Dict[str, str] = {}
+    for key, value in _FACE_RE.findall(str(clause or "")):
+        found[key] = value
+    return found
+
+
+def _screen_subjects(opening: str) -> List[Dict[str, Any]]:
+    """Each registered screen or display top: where it sits, and which way the screen faces."""
+    text = str(opening or "")
+    marks = list(_SUBJECT_HEAD_RE.finditer(text))
+    wall_m = _WALL_H_RE.search(text)
+    wall_h = float(wall_m.group(1)) if wall_m else 2.9
+    subjects: List[Dict[str, Any]] = []
+    for index, mark in enumerate(marks):
+        name = (mark.group(1) or mark.group(2) or "").strip()
+        if not name or name.endswith("屏面"):
+            continue
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
+        header = text.find("【", mark.end(), end)
+        if header >= 0:
+            end = header
+        clause = text[mark.end():end]
+        faces = _clause_faces(clause)
+        screen_face = _normalize_face(faces.get("屏面朝向"))
+        if screen_face not in {"北", "东", "南", "西"}:
+            continue
+        top_face = _normalize_face(faces.get("朝向"))
+        host = top_face == "上" or bool(_SCREEN_HOST_RE.search(name))
+        if host and _SCREEN_SLAB_RE.search(name) and top_face != "上" and not _SCREEN_HOST_RE.search(name):
+            host = False
+        origin = _ORIGIN_RE.search(clause)
+        along = _ALONG_RE.search(clause)
+        plan = _PLAN_RE.search(clause)
+        lift = _LIFT_RE.search(clause)
+        parallel = _AXIS_RE.search(clause)
+        subjects.append(
+            {
+                "name": name,
+                "host": host,
+                "face": screen_face,
+                "east": float(origin.group(2)) if origin else None,
+                "north": float(origin.group(1)) if origin else None,
+                "along": tuple(float(along.group(i)) for i in (1, 2, 3)) if along else None,
+                "plan": tuple(float(plan.group(i)) for i in (1, 2)) if plan else None,
+                "parallel": parallel.group(1) if parallel else "",
+                "lift": float(lift.group(1)) if lift else None,
+                "on_wall": bool(_SCREEN_WALL_RE.search(clause)) or ("壁" in name and "立式" not in name),
+                "standing": "立式" in name,
+                "wall_h": wall_h,
+            }
+        )
+    return subjects
+
+
+def _screen_axes(face: str, width: float, height: float, thick: float) -> Tuple[float, float, float]:
+    if face in {"北", "南"}:
+        return width, thick, height
+    if face in {"东", "西"}:
+        return thick, width, height
+    return width, max(width, height), thick
+
+
+def _screen_oriented(face: str, along_east: float, along_north: float, height: float) -> bool:
+    if face in {"北", "南"}:
+        return along_north <= along_east and along_north <= height
+    if face in {"东", "西"}:
+        return along_east <= along_north and along_east <= height
+    return height <= along_east and height <= along_north
+
+
+def _reshape_screen(face: str, along_east: float, along_north: float, height: float, along: Optional[Tuple[float, float, float]]) -> Tuple[float, float, float]:
+    if along is not None:
+        return _screen_axes(face, along[0], along[1], along[2])
+    if _screen_oriented(face, along_east, along_north, height):
+        return along_east, along_north, height
+    thick = min(along_east, along_north, height)
+    if abs(height - thick) <= 1e-6:
+        width, risen = max(along_east, along_north), min(along_east, along_north)
+        return _screen_axes(face, width, risen, thick)
+    across = [value for value in (along_east, along_north) if abs(value - thick) > 1e-6]
+    width = max(across) if across else max(along_east, along_north)
+    return _screen_axes(face, width, height, thick)
+
+
+def _default_screen_size(item: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    """Width, height, thick, bottom. Meters already on the subject stay; the rest is only the white-model slab."""
+    if item["along"] is not None:
+        width, height, thick = item["along"]
+    elif item["standing"]:
+        width, height, thick = 0.9, 1.6, 0.06
+    elif item["on_wall"]:
+        width, height, thick = 1.6, 0.9, 0.06
+    else:
+        width, height, thick = 1.2, 0.9, 0.06
+    if item["lift"] is not None:
+        bottom = item["lift"]
+    elif item["standing"]:
+        bottom = 0.0
+    elif item["on_wall"]:
+        bottom = max(0.3, item["wall_h"] * 0.35)
+    else:
+        bottom = 0.9
+    return width, height, thick, bottom
+
+
+def _mass_line(name: str, kind: str, values: Dict[str, Any]) -> str:
+    parts = [json.dumps(name, ensure_ascii=False), json.dumps(kind, ensure_ascii=False)]
+    for key in (
+        "east",
+        "north",
+        "along_east",
+        "along_north",
+        "height",
+        "bottom",
+        "state",
+        "low_east",
+        "low_north",
+        "high_east",
+        "high_north",
+        "low_z",
+        "high_z",
+        "face",
+    ):
+        if key not in values or values[key] in ("", None):
+            continue
+        if key in {"state", "face"}:
+            parts.append(key + "=" + json.dumps(str(values[key]), ensure_ascii=False))
+        else:
+            parts.append(f"{key}={_script_number(float(values[key]))}")
+    return "mass(" + ", ".join(parts) + ")"
+
+
+def _mass_values(found: re.Match) -> Dict[str, Any]:
+    values: Dict[str, Any] = {}
+    for key, raw in _MASS_ARG.findall(found.group("rest") or ""):
+        if key not in _MASS_KEYS:
+            continue
+        values[key] = _unquote(raw) if str(raw)[:1] in {"'", '"'} else float(raw)
+    return values
+
+
+def _panel_on(host: Dict[str, Any], face: str) -> Dict[str, Any]:
+    along_east = float(host.get("along_east") or 0.9)
+    along_north = float(host.get("along_north") or 0.9)
+    height = float(host.get("height") or 0.75)
+    bottom = float(host.get("bottom") or 0.0)
+    east = float(host.get("east") or 0.0)
+    north = float(host.get("north") or 0.0)
+    across = along_east if face in {"北", "南"} else along_north
+    width = max(0.45, min(across * 0.7, 1.2))
+    panel_h = 0.42
+    thick = 0.04
+    sx, sy, sz = _screen_axes(face, width, panel_h, thick)
+    shift = {"北": (0.0, along_north / 2), "南": (0.0, -along_north / 2), "东": (along_east / 2, 0.0), "西": (-along_east / 2, 0.0)}
+    dx, dy = shift[face]
+    return {
+        "east": east + dx,
+        "north": north + dy,
+        "along_east": sx,
+        "along_north": sy,
+        "height": sz,
+        "bottom": bottom + height,
+        "face": face,
+    }
+
+
+def apply_screens(script: str, opening: str) -> str:
+    """Stand each screen on the axis its screen faces. A display top keeps the table and adds the panel."""
+    subjects = [item for item in _screen_subjects(opening) if item["east"] is not None and item["north"] is not None]
+    if not subjects:
+        return str(script or "")
+    lines = str(script or "").splitlines()
+    parsed: List[Optional[re.Match]] = [_MASS_CALL.match(line.strip()) for line in lines]
+    names = []
+    for found in parsed:
+        if found is None:
+            names.append("")
+        else:
+            names.append(_unquote(found.group("name")).strip())
+    extra: List[str] = []
+    for item in subjects:
+        panel_name = item["name"] + "屏面"
+        if item["host"]:
+            host_at = names.index(item["name"]) if item["name"] in names else -1
+            if host_at < 0:
+                long_m, short_m = item["plan"] if item["plan"] else (0.9, 0.9)
+                if item["parallel"] == "Y线":
+                    along_east, along_north = short_m, long_m
+                else:
+                    along_east, along_north = long_m, short_m
+                host_values = {
+                    "east": item["east"],
+                    "north": item["north"],
+                    "along_east": along_east,
+                    "along_north": along_north,
+                    "height": _furniture_height(item["name"]),
+                    "bottom": item["lift"] or 0.0,
+                    "face": "上",
+                }
+                extra.append(_mass_line(item["name"], "furniture", host_values))
+            else:
+                found = parsed[host_at]
+                assert found is not None
+                host_values = _mass_values(found)
+                host_values["face"] = "上"
+                host_values.setdefault("east", item["east"])
+                host_values.setdefault("north", item["north"])
+                lines[host_at] = _mass_line(item["name"], "furniture", host_values)
+            panel = _panel_on(host_values, item["face"])
+            if panel_name in names:
+                at = names.index(panel_name)
+                lines[at] = _mass_line(panel_name, "screen", panel)
+            else:
+                extra.append(_mass_line(panel_name, "screen", panel))
+            continue
+        width, height, thick, bottom = _default_screen_size(item)
+        along_east, along_north, risen = _screen_axes(item["face"], width, height, thick)
+        values = {
+            "east": item["east"],
+            "north": item["north"],
+            "along_east": along_east,
+            "along_north": along_north,
+            "height": risen,
+            "bottom": bottom,
+            "face": item["face"],
+        }
+        if item["name"] in names:
+            at = names.index(item["name"])
+            found = parsed[at]
+            assert found is not None
+            current = _mass_values(found)
+            shaped = _reshape_screen(
+                item["face"],
+                float(current.get("along_east") or along_east),
+                float(current.get("along_north") or along_north),
+                float(current.get("height") or risen),
+                item["along"],
+            )
+            values["along_east"], values["along_north"], values["height"] = shaped
+            values["east"] = float(current.get("east", item["east"]))
+            values["north"] = float(current.get("north", item["north"]))
+            if "bottom" in current and item["lift"] is None:
+                values["bottom"] = float(current["bottom"])
+            if item["lift"] is not None:
+                values["bottom"] = item["lift"]
+            lines[at] = _mass_line(item["name"], "screen", values)
+        else:
+            extra.append(_mass_line(item["name"], "screen", values))
+    if extra:
+        lines.extend(extra)
+    return "\n".join(lines)
 
 
 def apply_facing(script: str, opening: str) -> str:

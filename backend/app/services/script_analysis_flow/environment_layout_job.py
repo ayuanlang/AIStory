@@ -392,6 +392,7 @@ async def _render_group(
     from app.services.script_analysis_flow.environment_layout import (
         LayoutError,
         apply_facing,
+        apply_screens,
         boxes_from_layout_script,
         layout_messages,
         layout_script_from_model_text,
@@ -498,7 +499,7 @@ async def _render_group(
                 gap = layout_script_gaps(room_text, layout_boxes)
                 if gap:
                     raise LayoutError(gap)
-                script_text = apply_facing(script_text, room_text)
+                script_text = apply_screens(apply_facing(script_text, room_text), room_text)
             elif view_picture_list():
                 from app.services.script_analysis_flow.environment_layout import image_room_gaps
 

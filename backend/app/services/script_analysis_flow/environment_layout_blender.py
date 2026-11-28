@@ -327,7 +327,7 @@ def clamp_inside(value, rear, far, look_sign):
     return max(min(value, inner_rear), inner_far)
 
 def occupies(item, point):
-    if item["kind"] not in {{"furniture", "lamp", "door", "person", "prop"}}:
+    if item["kind"] not in {{"furniture", "lamp", "door", "person", "prop", "screen"}}:
         return False
     if not still_here(item):
         return False
